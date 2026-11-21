@@ -1,12 +1,15 @@
-Aviatika MAI-89 — photograph by Miguel Mendez.
-Source: https://commons.wikimedia.org/wiki/File:Aviatika_MAI-89_(14711884545).jpg
-License: Creative Commons Attribution 2.0 Generic
-https://creativecommons.org/licenses/by/2.0/
-Changes: resized and encoded as WebP. Cropping and restrained desaturation are applied in the interface.
+tu-144-cutout.webp — Cutout based on a photograph of the Tupolev Tu-144LL in flight, Jim Ross / NASA.
+Source: https://commons.wikimedia.org/wiki/File:Tu-144LL_in_flight.jpg
+License: Public domain, NASA photograph.
+Changes: background removed with ImageGen, cropped, resized and encoded as WebP. Displayed with reduced saturation.
 
-Avion MAI F-1 “Favorit” — photograph by Yuriybrisk.
-Source: https://commons.wikimedia.org/wiki/File:Wikitrip_to_MAI_museum_2016-02-02_028.JPG
-License: Creative Commons Attribution-ShareAlike 3.0 Unported
-https://creativecommons.org/licenses/by-sa/3.0/
-Changes: resized and encoded as WebP. Cropping and desaturation are applied in the interface.
-The resized copy and its adaptations remain under the same CC BY-SA 3.0 license.
+mai-aircraft-detail.webp — Tupolev Tu-144 engine exhaust, AlfvanBeem.
+Source: https://commons.wikimedia.org/wiki/File:Tu-144_engine_exhaust.JPG
+License: CC0 1.0 Universal.
+https://creativecommons.org/publicdomain/zero/1.0/
+Changes: cropped and encoded as WebP. Displayed in monochrome.
+
+mai-aircraft-inset.webp — Tupolev Tu-144LL takeoff at Zhukovsky, NASA / IBP.
+Source: https://commons.wikimedia.org/wiki/File:Russian_Tu-144LL_SST_Flying_Laboratory_Takeoff_at_Zhukovsky_Air_Development_Center.jpg
+License: Public domain, NASA photograph.
+Changes: resized and encoded as WebP. Cropped and displayed in monochrome in the interface.

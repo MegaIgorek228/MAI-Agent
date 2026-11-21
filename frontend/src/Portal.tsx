@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 import type { DocumentItem, Profile, User } from "./api";
+import { EditorialSpread } from "./EditorialSpread";
 import { Icon } from "./Icon";
 
 export type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
@@ -29,10 +30,20 @@ export function isStaff(user: User) {
   return user.role === "admissions_staff" || user.role === "administrator";
 }
 
-const photoSource = "https://commons.wikimedia.org/wiki/File:Aviatika_MAI-89_(14711884545).jpg";
-const photoLicense = "https://creativecommons.org/licenses/by/2.0/";
-const detailPhotoSource = "https://commons.wikimedia.org/wiki/File:Wikitrip_to_MAI_museum_2016-02-02_028.JPG";
-const detailPhotoLicense = "https://creativecommons.org/licenses/by-sa/3.0/";
+const aircraft = {
+  hero: {
+    src: "/tu-144-cutout.webp",
+    alt: "Сверхзвуковой самолёт Ту-144ЛЛ в полёте"
+  },
+  detail: {
+    src: "/mai-aircraft-detail.webp",
+    alt: "Сопла двигателей Ту-144 крупным планом"
+  },
+  inset: {
+    src: "/mai-aircraft-inset.webp",
+    alt: "Ту-144ЛЛ на взлёте в Жуковском"
+  }
+};
 
 function Brand() {
   return (
@@ -49,15 +60,9 @@ function AircraftPhoto({ className, action }: { className: string; action?: Reac
   return (
     <figure className={className}>
       <div className="aircraft-frame">
-        <img src="/mai-aircraft.webp" alt="Лёгкий биплан «Авиатика» разработки МАИ в полёте" fetchPriority="high" />
+        <img src={aircraft.hero.src} alt={aircraft.hero.alt} fetchPriority="high" />
         {action}
       </div>
-      <figcaption>
-        <strong>Авиатика · разработка МАИ</strong>
-        <span><a href={photoSource} target="_blank" rel="noreferrer">Фото Miguel Mendez</a>
-          <span aria-hidden="true"> · </span><a href={photoLicense} target="_blank" rel="noreferrer">CC BY 2.0</a>
-        </span>
-      </figcaption>
     </figure>
   );
 }
@@ -90,7 +95,7 @@ export function AuthScreen({
       </header>
       <main className="auth-shell">
         <div className="auth-publication">
-          <p className="auth-publication__title">Поступление <br />в МАИ</p>
+          <p className="auth-publication__title">Поступление <br /><span>в МАИ</span></p>
           <AircraftPhoto className="auth-visual" />
         </div>
         <section className="auth-side" aria-labelledby="auth-title">
@@ -192,15 +197,16 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
   };
 
   return (
-    <div className="app-shell">
+    <div className={view === "home" ? "app-shell app-shell--home" : "app-shell"}>
       <header className="app-header">
         <div className="app-masthead">
           <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
-          <button ref={menuToggle} type="button" className="button-icon button-secondary app-menu-toggle"
+          <button ref={menuToggle} type="button" className="app-menu-toggle"
             onClick={() => setMenuOpen((open) => !open)}
             aria-label={menuOpen ? "Закрыть меню" : "Открыть меню"}
             aria-expanded={menuOpen} aria-controls="app-sidebar">
             <Icon name={menuOpen ? "x" : "menu"} />
+            <span>Меню</span>
           </button>
           <div id="app-sidebar" className={menuOpen ? "app-sidebar app-sidebar--open" : "app-sidebar"}>
             <nav className="app-nav" aria-label="Разделы кабинета">
@@ -284,12 +290,9 @@ export function HomePage({ user, profile, documents, pairingCode, pairingPending
   return (
     <div className="home-page">
       <section className="home-lead" aria-labelledby="home-title">
-        <div className="home-lead__top">
-          <p className="editorial-kicker">Московский авиационный институт</p>
-          <a href={admissionsUrl} target="_blank" rel="noreferrer" className="topbar-link">
-            Сайт приёмной комиссии <Icon name="external" />
-          </a>
-        </div>
+        <p className="home-lead__summary">
+          {isStaff(user) ? "Работа приёмной комиссии" : "Личный кабинет абитуриента"}
+        </p>
         <h1 id="home-title">
           {isStaff(user) ? "Приёмная кампания" : <>Поступление <span className="home-lead__place">в МАИ</span></>}
         </h1>
@@ -299,35 +302,7 @@ export function HomePage({ user, profile, documents, pairingCode, pairingPending
           Спросить ассистента <Icon name="arrow-right" />
         </button>
       } />
-      <section className="home-index" aria-labelledby="home-sections">
-        <div className="home-index__intro">
-          <figure className="editorial-detail">
-            <img src="/mai-cockpit.webp" alt="Открытая кабина биплана «Фаворит»" fetchPriority="low" />
-            <figcaption>
-              <strong>Кабина Авион МАИ Ф-1</strong>
-              <span><a href={detailPhotoSource} target="_blank" rel="noreferrer">Фото Yuriybrisk</a>
-                <span aria-hidden="true"> · </span><a href={detailPhotoLicense} target="_blank" rel="noreferrer">CC BY-SA 3.0</a>
-              </span>
-            </figcaption>
-          </figure>
-          <h2>{firstName ? `Здравствуйте, ${firstName}` : isStaff(user) ? "Рабочее место" : "Ваш кабинет"}</h2>
-          <p>Ассистент поможет разобраться с правилами, сроками и документами.</p>
-        </div>
-        <div className="home-section">
-          <h2 id="home-sections" className="editorial-kicker">Разделы кабинета</h2>
-          <div className="quick-links">
-            {sections.map(({ view, description }) => (
-              <button className="quick-card" type="button" key={view} onClick={() => onNavigate(view)}>
-                <span>
-                  <strong>{viewTitles[view]}</strong>
-                  <span className="quick-card__description">{description}</span>
-                </span>
-                <Icon className="quick-card__arrow" name="arrow-right" />
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
+      <EditorialSpread sections={sections} firstName={firstName} staff={isStaff(user)} photos={aircraft} onNavigate={onNavigate} />
       <section className="telegram-panel" aria-labelledby="telegram-title">
         <div className="telegram-panel__icon"><Icon name="telegram" /></div>
         <div className="telegram-panel__text">
