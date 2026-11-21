@@ -3,18 +3,17 @@ import type { FormEvent, ReactNode } from "react";
 
 import type { DocumentItem, Profile, User } from "./api";
 import { Icon } from "./Icon";
-import type { IconName } from "./Icon";
 
 export type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
 export type AuthMode = "login" | "register";
 
-const views: Record<View, { title: string; icon: IconName }> = {
-  home: { title: "Главная", icon: "home" },
-  agent: { title: "Ассистент", icon: "chat" },
-  applications: { title: "Заявления", icon: "folder" },
-  documents: { title: "Документы", icon: "file" },
-  staff: { title: "Рабочее место", icon: "staff" },
-  profile: { title: "Профиль", icon: "user" }
+const viewTitles: Record<View, string> = {
+  home: "Главная",
+  agent: "Ассистент",
+  applications: "Заявления",
+  documents: "Документы",
+  staff: "Рабочее место",
+  profile: "Профиль"
 };
 
 const roles: Record<string, string> = {
@@ -30,15 +29,36 @@ export function isStaff(user: User) {
   return user.role === "admissions_staff" || user.role === "administrator";
 }
 
-function Brand({ light = false }: { light?: boolean }) {
+const photoSource = "https://commons.wikimedia.org/wiki/File:Aviatika_MAI-89_(14711884545).jpg";
+const photoLicense = "https://creativecommons.org/licenses/by/2.0/";
+const detailPhotoSource = "https://commons.wikimedia.org/wiki/File:Wikitrip_to_MAI_museum_2016-02-02_028.JPG";
+const detailPhotoLicense = "https://creativecommons.org/licenses/by-sa/3.0/";
+
+function Brand() {
   return (
-    <span className={light ? "brand brand--light" : "brand"}>
-      <span className="brand__mark"><Icon name="orbit" /></span>
+    <span className="brand">
       <span className="brand__words">
-        <strong>MAI Agent</strong>
+        <strong><span>MAI</span> Agent</strong>
         <small>Приёмная комиссия</small>
       </span>
     </span>
+  );
+}
+
+function AircraftPhoto({ className, action }: { className: string; action?: ReactNode }) {
+  return (
+    <figure className={className}>
+      <div className="aircraft-frame">
+        <img src="/mai-aircraft.webp" alt="Лёгкий биплан «Авиатика» разработки МАИ в полёте" fetchPriority="high" />
+        {action}
+      </div>
+      <figcaption>
+        <strong>Авиатика · разработка МАИ</strong>
+        <span><a href={photoSource} target="_blank" rel="noreferrer">Фото Miguel Mendez</a>
+          <span aria-hidden="true"> · </span><a href={photoLicense} target="_blank" rel="noreferrer">CC BY 2.0</a>
+        </span>
+      </figcaption>
+    </figure>
   );
 }
 
@@ -61,66 +81,67 @@ export function AuthScreen({
   const signingIn = mode === "login";
 
   return (
-    <main className="auth-shell">
-      <div className="auth-visual">
-        <Brand light />
-        <div className="auth-visual__copy">
-          <p className="auth-visual__title">Поступление<br />в МАИ</p>
-          <p>Заявления, документы и помощь с поступлением в одном кабинете.</p>
-        </div>
-      </div>
-      <section className="auth-side" aria-labelledby="auth-title">
-        <div className="auth-mobile-brand"><Brand /></div>
-        <div className="auth-main">
-          <div className="auth-heading">
-            <h1 id="auth-title">{signingIn ? "Вход в кабинет" : "Регистрация"}</h1>
-            <p>{signingIn ? "Введите email и пароль, чтобы войти." : "Создайте аккаунт для работы с документами и заявлениями."}</p>
-          </div>
-          <form onSubmit={onSubmit} className="auth-form">
-            <label className="auth-field">
-              Email
-              <span className="auth-input">
-                <Icon name="mail" />
-                <input name="email" type="email" autoComplete="username" value={email}
-                  placeholder="name@example.com" onChange={(event) => onEmailChange(event.target.value)} required />
-              </span>
-            </label>
-            <div className="auth-field">
-              <label htmlFor="auth-password">Пароль</label>
-              <div className="auth-input">
-                <Icon name="shield" />
-                <input id="auth-password" name="password" type={passwordVisible ? "text" : "password"} minLength={8}
-                  autoComplete={signingIn ? "current-password" : "new-password"} value={password}
-                  placeholder={signingIn ? "Введите пароль" : "Не менее 8 символов"}
-                  onChange={(event) => onPasswordChange(event.target.value)} required />
-                <button type="button" className="auth-reveal button-icon"
-                  aria-label={passwordVisible ? "Скрыть пароль" : "Показать пароль"}
-                  onClick={() => setPasswordVisible((visible) => !visible)}>
-                  <Icon name={passwordVisible ? "eye-off" : "eye"} />
-                </button>
-              </div>
-            </div>
-            {error && <p className="error" role="alert">{error}</p>}
-            <button className="auth-submit" type="submit" disabled={pending}>
-              {pending ? (signingIn ? "Входим…" : "Создаём аккаунт…") : (signingIn ? "Войти" : "Создать аккаунт")}
-              {!pending && <Icon name="arrow-right" />}
-            </button>
-          </form>
-          <div className="auth-switch">
-            <span>{signingIn ? "Впервые здесь?" : "Уже есть аккаунт?"}</span>
-            <button type="button" className="button-link" disabled={pending} onClick={() => {
-              setPasswordVisible(false);
-              onModeChange();
-            }}>
-              {signingIn ? "Зарегистрироваться" : "Войти в кабинет"}
-            </button>
-          </div>
-        </div>
-        <a className="auth-official" href={admissionsUrl} target="_blank" rel="noreferrer">
+    <div className="auth-page">
+      <header className="auth-masthead">
+        <Brand />
+        <a href={admissionsUrl} target="_blank" rel="noreferrer" className="topbar-link">
           Сайт приёмной комиссии <Icon name="external" />
         </a>
-      </section>
-    </main>
+      </header>
+      <main className="auth-shell">
+        <div className="auth-publication">
+          <p className="auth-publication__title">Поступление <br />в МАИ</p>
+          <AircraftPhoto className="auth-visual" />
+        </div>
+        <section className="auth-side" aria-labelledby="auth-title">
+          <div className="auth-main">
+            <div className="auth-heading">
+              <h1 id="auth-title">{signingIn ? "Вход в кабинет" : "Регистрация"}</h1>
+              <p>{signingIn ? "Введите email и пароль, чтобы войти." : "Создайте аккаунт для работы с документами и заявлениями."}</p>
+            </div>
+            <form onSubmit={onSubmit} className="auth-form">
+              <label className="auth-field">
+                Email
+                <span className="auth-input">
+                  <Icon name="mail" />
+                  <input name="email" type="email" autoComplete="username" value={email}
+                    placeholder="name@example.com" onChange={(event) => onEmailChange(event.target.value)} required />
+                </span>
+              </label>
+              <div className="auth-field">
+                <label htmlFor="auth-password">Пароль</label>
+                <div className="auth-input">
+                  <Icon name="shield" />
+                  <input id="auth-password" name="password" type={passwordVisible ? "text" : "password"} minLength={8}
+                    autoComplete={signingIn ? "current-password" : "new-password"} value={password}
+                    placeholder={signingIn ? "Введите пароль" : "Не менее 8 символов"}
+                    onChange={(event) => onPasswordChange(event.target.value)} required />
+                  <button type="button" className="auth-reveal button-icon"
+                    aria-label={passwordVisible ? "Скрыть пароль" : "Показать пароль"}
+                    onClick={() => setPasswordVisible((visible) => !visible)}>
+                    <Icon name={passwordVisible ? "eye-off" : "eye"} />
+                  </button>
+                </div>
+              </div>
+              {error && <p className="error" role="alert">{error}</p>}
+              <button className="auth-submit" type="submit" disabled={pending}>
+                {pending ? (signingIn ? "Входим…" : "Создаём аккаунт…") : (signingIn ? "Войти" : "Создать аккаунт")}
+                {!pending && <Icon name="arrow-right" />}
+              </button>
+            </form>
+            <div className="auth-switch">
+              <span>{signingIn ? "Впервые здесь?" : "Уже есть аккаунт?"}</span>
+              <button type="button" className="button-link" disabled={pending} onClick={() => {
+                setPasswordVisible(false);
+                onModeChange();
+              }}>
+                {signingIn ? "Зарегистрироваться" : "Войти в кабинет"}
+              </button>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
   );
 }
 
@@ -172,53 +193,55 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
 
   return (
     <div className="app-shell">
-      <header className="app-mobile-top">
-        <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
-        <button ref={menuToggle} type="button" className="button-icon button-secondary app-menu-toggle"
-          onClick={() => setMenuOpen((open) => !open)}
-          aria-label={menuOpen ? "Закрыть меню" : "Открыть меню"}
-          aria-expanded={menuOpen} aria-controls="app-sidebar">
-          <Icon name={menuOpen ? "x" : "menu"} />
-        </button>
-      </header>
-      <aside id="app-sidebar" className={menuOpen ? "app-sidebar app-sidebar--open" : "app-sidebar"}>
-        <button type="button" className="brand-button app-desktop-brand" onClick={() => navigate("home")}><Brand /></button>
-        <nav className="app-nav" aria-label="Разделы кабинета">
-          {nav.map((item) => (
-            <button className="nav-item" type="button" key={item} onClick={() => navigate(item)}
-              aria-current={view === item ? "page" : undefined}>
-              <Icon name={views[item].icon} />
-              <span>{views[item].title}</span>
-              {view === item && <Icon className="nav-marker" name="chevron-right" />}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-footer">
-          <button className="sidebar-account" type="button" onClick={() => navigate("profile")}>
-            <span className="avatar">{account.initials}</span>
-            <span className="sidebar-account__text">
-              <strong title={account.name}>{account.name}</strong>
-              <small>{account.role}</small>
-            </span>
+      <header className="app-header">
+        <div className="app-masthead">
+          <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
+          <button ref={menuToggle} type="button" className="button-icon button-secondary app-menu-toggle"
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-label={menuOpen ? "Закрыть меню" : "Открыть меню"}
+            aria-expanded={menuOpen} aria-controls="app-sidebar">
+            <Icon name={menuOpen ? "x" : "menu"} />
           </button>
-          <button type="button" className="nav-item nav-item--logout" onClick={onLogout}>
-            <Icon name="logout" /> Выйти
-          </button>
+          <div id="app-sidebar" className={menuOpen ? "app-sidebar app-sidebar--open" : "app-sidebar"}>
+            <nav className="app-nav" aria-label="Разделы кабинета">
+              {nav.map((item) => (
+                <button className="nav-item" type="button" key={item} onClick={() => navigate(item)}
+                  aria-current={view === item ? "page" : undefined}>
+                  <span>{viewTitles[item]}</span>
+                </button>
+              ))}
+            </nav>
+            <div className="masthead-account">
+              <button className="masthead-account__profile" type="button" onClick={() => navigate("profile")}
+                aria-label="Открыть учётную запись" title={account.name}>
+                <span className="avatar">{account.initials}</span>
+                <span className="masthead-account__text">
+                  <strong>{account.name}</strong>
+                  <small>{account.role}</small>
+                </span>
+              </button>
+              <button type="button" className="masthead-account__logout" onClick={onLogout} title="Выйти">
+                <Icon name="logout" /><span>Выйти</span>
+              </button>
+            </div>
+          </div>
         </div>
-      </aside>
+      </header>
       {menuOpen && <button type="button" tabIndex={-1} aria-hidden="true" className="mobile-backdrop" onClick={() => setMenuOpen(false)} />}
       <div className="app-column">
-        <header className="app-topbar">
-          <div className="breadcrumbs">
-            <button type="button" className="button-link" onClick={() => navigate("home")}>Кабинет</button>
-            <Icon name="chevron-right" />
-            <span>{views[view].title}</span>
+        {view !== "home" && (
+          <div className="app-topbar">
+            <div className="breadcrumbs">
+              <button type="button" className="button-link" onClick={() => navigate("home")}>Кабинет</button>
+              <Icon name="chevron-right" />
+              <span>{viewTitles[view]}</span>
+            </div>
+            <a href={admissionsUrl} target="_blank" rel="noreferrer" className="topbar-link">
+              Сайт приёмной комиссии <Icon name="external" />
+            </a>
           </div>
-          <a href={admissionsUrl} target="_blank" rel="noreferrer" className="topbar-link">
-            Сайт приёмной комиссии <Icon name="external" />
-          </a>
-        </header>
-        <main className={view === "agent" ? "app-content app-content--assistant" : "app-content"}>
+        )}
+        <main className={view === "home" ? "app-content app-content--home" : "app-content"}>
           {error && <p className="error global-error" role="alert">{error}</p>}
           {children}
         </main>
@@ -239,49 +262,70 @@ type HomePageProps = {
 
 export function HomePage({ user, profile, documents, pairingCode, pairingPending, onPair, onNavigate }: HomePageProps) {
   const [copiedCode, setCopiedCode] = useState("");
-  const cards: { view: View; description: string; tone: string }[] = [];
+  const sections: { view: View; description: string }[] = [];
   if (user.role === "applicant") {
-    cards.push({ view: "applications", description: "Подайте заявление и следите за его статусом.", tone: "violet" });
+    sections.push({ view: "applications", description: "Подача заявления и проверка статуса" });
   }
   if (isStaff(user)) {
-    cards.push({ view: "staff", description: "Проверяйте заявления и публикуйте правила приёма.", tone: "violet" });
+    sections.push({ view: "staff", description: "Проверка заявлений и публикация правил" });
   }
   if (user.role !== "student") {
-    cards.push({
+    sections.push({
       view: "documents",
       description: documents.length
-        ? `Загружено файлов: ${documents.length}. Откройте список и проверьте комплект.`
-        : "Загрузите файлы и проверьте комплектность.",
-      tone: "blue"
+        ? `Загружено файлов: ${documents.length}`
+        : "Загрузка файлов и проверка комплектности"
     });
   }
-  cards.push({ view: "profile", description: "Личные данные и параметры поступления.", tone: "rose" });
+  sections.push({ view: "profile", description: "Контакты и параметры поступления" });
 
   const firstName = profile?.first_name?.trim();
-  const title = firstName ? `Здравствуйте, ${firstName}!` : (isStaff(user) ? "Рабочий кабинет" : "Поступление в МАИ");
 
   return (
     <div className="home-page">
-      <section className="home-hero">
-        <div className="home-hero__copy">
-          <h1>{title}</h1>
-          <p>Ассистент подскажет, как подать заявление, какие документы нужны и где найти правила приёма.</p>
-          <button className="hero-button" type="button" onClick={() => onNavigate("agent")}>
-            <Icon name="spark" /> Спросить ассистента <Icon name="arrow-right" />
-          </button>
+      <section className="home-lead" aria-labelledby="home-title">
+        <div className="home-lead__top">
+          <p className="editorial-kicker">Московский авиационный институт</p>
+          <a href={admissionsUrl} target="_blank" rel="noreferrer" className="topbar-link">
+            Сайт приёмной комиссии <Icon name="external" />
+          </a>
         </div>
+        <h1 id="home-title">
+          {isStaff(user) ? "Приёмная кампания" : <>Поступление <span className="home-lead__place">в МАИ</span></>}
+        </h1>
       </section>
-      <section className="home-section" aria-labelledby="home-sections">
-        <h2 id="home-sections">Ваши разделы</h2>
-        <div className="quick-links">
-          {cards.map(({ view, description, tone }) => (
-            <button className="quick-card" type="button" key={view} onClick={() => onNavigate(view)}>
-              <span className={`quick-card__icon quick-card__icon--${tone}`}><Icon name={views[view].icon} /></span>
-              <Icon className="quick-card__arrow" name="arrow-right" />
-              <strong>{views[view].title}</strong>
-              <span className="quick-card__description">{description}</span>
-            </button>
-          ))}
+      <AircraftPhoto className="editorial-photo" action={
+        <button className="editorial-action" type="button" onClick={() => onNavigate("agent")}>
+          Спросить ассистента <Icon name="arrow-right" />
+        </button>
+      } />
+      <section className="home-index" aria-labelledby="home-sections">
+        <div className="home-index__intro">
+          <figure className="editorial-detail">
+            <img src="/mai-cockpit.webp" alt="Открытая кабина биплана «Фаворит»" fetchPriority="low" />
+            <figcaption>
+              <strong>Кабина Авион МАИ Ф-1</strong>
+              <span><a href={detailPhotoSource} target="_blank" rel="noreferrer">Фото Yuriybrisk</a>
+                <span aria-hidden="true"> · </span><a href={detailPhotoLicense} target="_blank" rel="noreferrer">CC BY-SA 3.0</a>
+              </span>
+            </figcaption>
+          </figure>
+          <h2>{firstName ? `Здравствуйте, ${firstName}` : isStaff(user) ? "Рабочее место" : "Ваш кабинет"}</h2>
+          <p>Ассистент поможет разобраться с правилами, сроками и документами.</p>
+        </div>
+        <div className="home-section">
+          <h2 id="home-sections" className="editorial-kicker">Разделы кабинета</h2>
+          <div className="quick-links">
+            {sections.map(({ view, description }) => (
+              <button className="quick-card" type="button" key={view} onClick={() => onNavigate(view)}>
+                <span>
+                  <strong>{viewTitles[view]}</strong>
+                  <span className="quick-card__description">{description}</span>
+                </span>
+                <Icon className="quick-card__arrow" name="arrow-right" />
+              </button>
+            ))}
+          </div>
         </div>
       </section>
       <section className="telegram-panel" aria-labelledby="telegram-title">
