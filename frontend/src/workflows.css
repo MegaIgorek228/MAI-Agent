@@ -1,7 +1,12 @@
 .workflow {
+  --workflow-panel-fill: #fafaf7;
+  --workflow-recess: #edeeea;
+  --workflow-outline: #d5d8d3;
+  --workflow-panel-radius: 14px;
+  --workflow-control-radius: 8px;
   container: workflow / inline-size;
   display: grid;
-  gap: 22px;
+  gap: clamp(14px, 2vw, 22px);
   min-width: 0;
 }
 
@@ -14,12 +19,13 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 20px;
-  padding-block-end: 1rem;
-  border-block-end: 1px solid var(--border);
+  padding: 0 0 clamp(9px, 2cqw, 19px);
+  border-block-end: 1px solid var(--workflow-outline);
 }
 
-.workflow-heading h2 {
-  color: var(--primary);
+.workflow-heading :is(h1, h2) {
+  color: var(--ink);
+  font-family: var(--display-type);
   font-size: clamp(28px, 4.5cqw, 43px);
   font-weight: 720;
   line-height: 1.1;
@@ -27,8 +33,10 @@
 }
 
 .workflow-heading p {
-  margin-top: 9px;
+  max-width: 58ch;
+  margin-top: 8px;
   color: var(--muted);
+  font-size: .92rem;
   line-height: 1.5;
 }
 
@@ -41,9 +49,10 @@
   align-content: start;
   gap: 19px;
   min-width: 0;
-  padding: clamp(17px, 3cqw, 28px);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  padding: clamp(15px, 2.6cqw, 26px);
+  background: var(--workflow-panel-fill);
+  border: 1px solid var(--workflow-outline);
+  border-radius: var(--workflow-panel-radius);
 }
 
 .workflow-panel-heading {
@@ -55,6 +64,7 @@
 
 .workflow-panel-heading h3,
 .workflow-panel-heading h4 {
+  font-family: var(--display-type);
   font-size: 19px;
   font-weight: 690;
   line-height: 1.25;
@@ -80,9 +90,10 @@
   width: 37px;
   height: 37px;
   place-items: center;
-  color: var(--primary);
-  background: var(--primary-soft);
-  border: 1px solid var(--border);
+  color: var(--ink);
+  background: var(--workflow-recess);
+  border: 1px solid var(--workflow-outline);
+  border-radius: 50%;
 }
 
 .workflow-mark > * {
@@ -101,9 +112,9 @@
   height: 25px;
   padding-inline: 7px;
   place-items: center;
-  color: var(--primary);
-  background: var(--primary-soft);
-  border-radius: 0;
+  color: var(--ink);
+  background: var(--workflow-recess);
+  border-radius: 999px;
   font-size: 12px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
@@ -118,8 +129,9 @@
   max-width: 100%;
   padding: 5px 9px;
   color: var(--muted);
-  background: var(--canvas);
-  border: 1px solid var(--border);
+  background: var(--workflow-recess);
+  border: 1px solid transparent;
+  border-radius: 999px;
   font-size: 11px;
   font-weight: 690;
   line-height: 1.35;
@@ -130,6 +142,7 @@
   height: 5px;
   flex: 0 0 auto;
   background: currentColor;
+  border-radius: 50%;
   content: "";
 }
 
@@ -167,6 +180,7 @@
   justify-content: center;
   gap: 7px;
   max-width: 100%;
+  border-radius: var(--workflow-control-radius);
 }
 
 .workflow :is(.workflow-actions, .workflow-heading-actions, .workflow-queue-filter) button > :first-child {
@@ -174,9 +188,9 @@
 }
 
 .workflow button.workflow-secondary {
-  color: var(--primary);
-  background: var(--surface);
-  border: 1px solid var(--border);
+  color: var(--ink);
+  background: var(--workflow-panel-fill);
+  border: 1px solid var(--workflow-outline);
 }
 
 .workflow button.workflow-secondary:hover:not(:disabled) {
@@ -197,7 +211,6 @@
   width: 47px;
   height: 47px;
   margin-bottom: 4px;
-  border-radius: 0;
 }
 
 .workflow-empty strong {
@@ -239,11 +252,11 @@
   align-items: center;
   gap: 12px;
   min-width: 0;
-  min-height: 89px;
-  padding: 13px;
-  border: 1px dashed var(--border);
-  border-radius: 0;
-  background: var(--canvas);
+  min-height: 96px;
+  padding: 14px;
+  border: 1px dashed #a8aea8;
+  border-radius: 11px;
+  background: var(--workflow-recess);
 }
 
 .workflow-dropzone:is(:hover, :focus-within) {
@@ -299,14 +312,14 @@
 }
 
 .workflow-file-list .workflow-list {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--workflow-outline);
 }
 
 .workflow-file {
   display: grid;
   gap: 12px;
   padding: 14px 0;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--workflow-outline);
 }
 
 .workflow-file:last-child {
@@ -347,7 +360,7 @@
 }
 
 .workflow-file-row button {
-  min-height: 34px;
+  min-height: 36px;
   padding: 6px 9px;
   font-size: 12px;
 }
@@ -367,13 +380,13 @@
 .workflow-disclosure {
   min-width: 0;
   padding: 10px 13px;
-  background: var(--canvas);
-  border: 1px solid var(--border);
-  border-radius: 0;
+  background: var(--workflow-recess);
+  border: 1px solid var(--workflow-outline);
+  border-radius: var(--workflow-control-radius);
 }
 
 .workflow-disclosure > summary {
-  color: var(--primary);
+  color: var(--ink);
   font-size: 13px;
   font-weight: 650;
   cursor: pointer;
@@ -433,7 +446,7 @@
   color: var(--primary);
   background: var(--primary-soft);
   border: 1px solid var(--border);
-  border-radius: 0;
+  border-radius: var(--workflow-control-radius);
   font-size: 13px;
   line-height: 1.5;
 }
@@ -485,7 +498,7 @@
   display: grid;
   gap: 5px;
   padding-top: 12px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--workflow-outline);
   overflow-wrap: anywhere;
 }
 
@@ -500,8 +513,13 @@
 .workflow .workflow-editor fieldset {
   min-width: 0;
   padding: 13px 14px 14px;
-  border: 1px solid var(--border);
-  border-radius: 0;
+  border: 1px solid var(--workflow-outline);
+  border-radius: 10px;
+}
+
+.workflow :is(input:not([type="checkbox"], [type="radio"]), select, textarea) {
+  border-color: #898f89;
+  border-radius: var(--workflow-control-radius);
 }
 
 .workflow .workflow-editor legend {
@@ -521,8 +539,8 @@
   align-items: center;
   gap: 9px;
   padding: 8px 9px;
-  background: var(--canvas);
-  border-radius: 0;
+  background: var(--workflow-recess);
+  border-radius: var(--workflow-control-radius);
 }
 
 .workflow .workflow-check-row input {
@@ -576,7 +594,7 @@
   display: grid;
   gap: 13px;
   padding-top: 18px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--workflow-outline);
 }
 
 .workflow-history h4 {
@@ -621,7 +639,7 @@
   margin-top: 4px;
   background: var(--primary-soft);
   border: 2px solid var(--primary);
-  border-radius: 0;
+  border-radius: 50%;
 }
 
 .workflow-timeline li > div {
@@ -641,31 +659,37 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  width: 100%;
+  justify-self: start;
+  gap: 5px;
+  max-width: 100%;
   margin-block-end: .25rem;
-  border-block-end: 1px solid var(--border);
+  padding: 4px;
+  background: var(--workflow-recess);
+  border: 1px solid var(--workflow-outline);
+  border-radius: 12px;
 }
 
 .workflow .workflow-tabs button {
   display: flex;
   align-items: center;
   gap: 7px;
-  min-height: 39px;
+  min-height: 38px;
   padding: 7px 11px;
   color: var(--muted);
   background: transparent;
-  border: 0;
-  border-block-end: 2px solid transparent;
-  border-radius: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
   font-size: 13px;
-  white-space: nowrap;
 }
 
 .workflow .workflow-tabs button:is(:hover, [aria-pressed="true"]) {
-  color: var(--primary);
-  background: transparent;
-  border-block-end-color: var(--primary);
+  color: var(--ink);
+  background: var(--workflow-panel-fill);
+  border-color: var(--workflow-outline);
+}
+
+.workflow .workflow-tabs button[aria-pressed="true"] {
+  font-weight: 670;
 }
 
 .workflow-queue-filter {
@@ -676,11 +700,11 @@
 }
 
 .workflow-queue-list {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--workflow-outline);
 }
 
 .workflow-queue-list > li + li {
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--workflow-outline);
 }
 
 .workflow .workflow-queue-row {
@@ -693,14 +717,14 @@
   color: var(--ink);
   background: transparent;
   border: 0;
-  border-radius: 0;
+  border-radius: var(--workflow-control-radius);
   text-align: start;
 }
 
 .workflow .workflow-queue-row:hover,
 .workflow .workflow-queue-row[aria-pressed="true"] {
   color: var(--ink);
-  background: var(--primary-soft);
+  background: var(--workflow-recess);
 }
 
 .workflow-queue-row > :last-child {
@@ -733,8 +757,8 @@
   gap: 11px;
   min-width: 0;
   padding: 13px;
-  border: 1px solid var(--border);
-  border-radius: 0;
+  border: 1px solid var(--workflow-outline);
+  border-radius: 10px;
 }
 
 .workflow-document-review .workflow-status {
@@ -753,8 +777,8 @@
   justify-content: space-between;
   gap: 8px;
   padding: 10px 12px;
-  background: var(--canvas);
-  border-radius: 0;
+  background: var(--workflow-recess);
+  border-radius: var(--workflow-control-radius);
 }
 
 .workflow-staff-scores dt {

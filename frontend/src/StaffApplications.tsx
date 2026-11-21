@@ -64,7 +64,7 @@ export function StaffApplications({ token }: { token: string }) {
 
   return (
     <div className="workflow">
-      <WorkflowHeader title="Рабочее место сотрудника" description="Проверяйте заявления и документы и публикуйте правила приёма." />
+      <WorkflowHeader level={1} title="Рабочее место сотрудника" description="Проверяйте заявления и документы и публикуйте правила приёма." />
       <div className="workflow-tabs" role="group" aria-label="Раздел рабочего места">
         <button type="button" aria-pressed={mode === "applications"} onClick={() => setMode("applications")}><Icon name="folder" /> Заявления</button>
         <button type="button" aria-pressed={mode === "applicants"} onClick={() => setMode("applicants")}><Icon name="user" /> Абитуриенты</button>

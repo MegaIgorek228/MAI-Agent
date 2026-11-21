@@ -150,7 +150,7 @@ export function ApplicantApplications({ token, documents, profile }: {
 
   return (
     <div className="workflow">
-      <WorkflowHeader title="Заявления" description="Создавайте заявления, прикладывайте документы и следите за проверкой.">
+      <WorkflowHeader level={1} title="Заявления" description="Создавайте заявления, прикладывайте документы и следите за проверкой.">
         <button type="button" onClick={() => setSelection("new")}><Icon name="plus" /> Новое заявление</button>
       </WorkflowHeader>
       {error && <p role="alert" className="error">{error}</p>}

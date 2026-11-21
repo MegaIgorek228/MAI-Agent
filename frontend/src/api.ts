@@ -1,3 +1,12 @@
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 const apiFetch = async (path: string, init?: RequestInit): Promise<Response> => {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData)) {
@@ -10,16 +19,16 @@ const apiFetch = async (path: string, init?: RequestInit): Promise<Response> => 
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     const detail: unknown = body.detail;
-    if (typeof detail === "string") throw new Error(detail);
+    if (typeof detail === "string") throw new ApiError(detail, response.status);
     if (Array.isArray(detail)) {
       const errors = detail.flatMap((item) => {
         if (!item || typeof item.msg !== "string") return [];
         const field = Array.isArray(item.loc) ? item.loc.slice(1).join(".") : "";
         return [field ? `${field}: ${item.msg}` : item.msg];
       });
-      if (errors.length) throw new Error(errors.join(". "));
+      if (errors.length) throw new ApiError(errors.join(". "), response.status);
     }
-    throw new Error(`Ошибка запроса (HTTP ${response.status})`);
+    throw new ApiError(`Ошибка запроса (HTTP ${response.status})`, response.status);
   }
   return response;
 };

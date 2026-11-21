@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 import type { Profile, User } from "./api";
-import { CabinetLinks, EditorialSpread } from "./EditorialSpread";
+import { AircraftMap } from "./AircraftMap";
 import { Icon } from "./Icon";
 
 export type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
@@ -30,21 +30,6 @@ export function isStaff(user: User) {
   return user.role === "admissions_staff" || user.role === "administrator";
 }
 
-const aircraft = {
-  hero: {
-    src: "/tu-144-cutout.webp",
-    alt: "Сверхзвуковой самолёт Ту-144ЛЛ в полёте"
-  },
-  detail: {
-    src: "/mai-aircraft-detail.webp",
-    alt: "Сопла двигателей Ту-144 крупным планом"
-  },
-  inset: {
-    src: "/mai-aircraft-inset.webp",
-    alt: "Ту-144ЛЛ на взлёте в Жуковском"
-  }
-};
-
 function Brand() {
   return (
     <span className="brand">
@@ -53,17 +38,6 @@ function Brand() {
         <small>Приёмная комиссия</small>
       </span>
     </span>
-  );
-}
-
-function AircraftPhoto({ className, action }: { className: string; action?: ReactNode }) {
-  return (
-    <figure className={className}>
-      <div className="aircraft-frame">
-        <img src={aircraft.hero.src} alt={aircraft.hero.alt} fetchPriority="high" />
-        {action}
-      </div>
-    </figure>
   );
 }
 
@@ -95,8 +69,10 @@ export function AuthScreen({
       </header>
       <main className="auth-shell">
         <div className="auth-publication">
-          <p className="auth-publication__title">Поступление <br /><span>в МАИ</span></p>
-          <AircraftPhoto className="auth-visual" />
+          <p className="auth-publication__title">Кабинет <br />на борту</p>
+          <figure className="auth-visual">
+            <img src="/cabin-cutaway.webp" alt="Самолёт с открытой кабиной и пассажирским салоном" fetchPriority="high" />
+          </figure>
         </div>
         <section className="auth-side" aria-labelledby="auth-title">
           <div className="auth-main">
@@ -172,6 +148,15 @@ type WorkspaceProps = {
 export function Workspace({ user, profile, view, error, onNavigate, onLogout, children }: WorkspaceProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuToggle = useRef<HTMLButtonElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const previousView = useRef(view);
+  useEffect(() => {
+    if (previousView.current !== view) {
+      previousView.current = view;
+      content.current?.focus({ preventScroll: true });
+    }
+  }, [view]);
+
   useEffect(() => {
     if (!menuOpen) return;
     const handleEscape = (event: KeyboardEvent) => {
@@ -197,7 +182,7 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
   };
 
   return (
-    <div className={view === "home" ? "app-shell app-shell--home" : "app-shell"}>
+    <div className="app-shell">
       <header className="app-header">
         <div className="app-masthead">
           <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
@@ -235,21 +220,12 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
       </header>
       {menuOpen && <button type="button" tabIndex={-1} aria-hidden="true" className="mobile-backdrop" onClick={() => setMenuOpen(false)} />}
       <div className="app-column">
-        {view !== "home" && (
-          <div className="app-topbar">
-            <div className="breadcrumbs">
-              <button type="button" className="button-link" onClick={() => navigate("home")}>Кабинет</button>
-              <Icon name="chevron-right" />
-              <span>{viewTitles[view]}</span>
-            </div>
-            <a href={admissionsUrl} target="_blank" rel="noreferrer" className="topbar-link">
-              Сайт приёмной комиссии <Icon name="external" />
-            </a>
-          </div>
-        )}
-        <main className={view === "home" ? "app-content app-content--home" : "app-content"}>
+        <main className="app-content">
           {error && <p className="error global-error" role="alert">{error}</p>}
-          {children}
+          <AircraftMap user={user} view={view} onNavigate={navigate} />
+          <div className="workspace-content" ref={content} tabIndex={-1} role="region" aria-label={viewTitles[view]}>
+            {children}
+          </div>
         </main>
       </div>
     </div>
@@ -257,44 +233,15 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
 }
 
 type HomePageProps = {
-  user: User;
   pairingCode: string;
   pairingPending: boolean;
   onPair: () => void;
-  onNavigate: (view: View) => void;
 };
 
-export function HomePage({ user, pairingCode, pairingPending, onPair, onNavigate }: HomePageProps) {
+export function HomePage({ pairingCode, pairingPending, onPair }: HomePageProps) {
   const [copiedCode, setCopiedCode] = useState("");
-  const staff = isStaff(user);
-  const sections: View[] = [];
-  if (user.role === "applicant") sections.push("applications");
-  if (staff) sections.push("staff");
-  if (user.role !== "student") sections.push("documents");
-  sections.push("profile");
 
   return (
-    <div className="home-page">
-      <section className="home-showcase" aria-labelledby="home-title">
-        <div className="home-lead">
-          <h1 id="home-title">
-            <span className="home-lead__context">{staff ? "Приёмная " : "Поступление "}</span>
-            <span className="home-lead__place">{staff ? "кампания" : "в МАИ"}</span>
-          </h1>
-        </div>
-        <div className="home-showcase__base">
-          <AircraftPhoto className="editorial-photo" action={
-            <div className="editorial-photo__action">
-              <p>{staff ? "Правила приёма и работа с заявлениями." : "Сроки, документы и правила поступления."}</p>
-              <button className="editorial-action" type="button" onClick={() => onNavigate("agent")}>
-                Спросить ассистента <Icon name="arrow-right" />
-              </button>
-            </div>
-          } />
-          <CabinetLinks sections={sections} onNavigate={onNavigate} />
-        </div>
-      </section>
-      <EditorialSpread photos={aircraft} />
       <section className="telegram-panel" aria-labelledby="telegram-title">
         <div className="telegram-panel__icon"><Icon name="telegram" /></div>
         <div className="telegram-panel__text">
@@ -320,7 +267,6 @@ export function HomePage({ user, pairingCode, pairingPending, onPair, onNavigate
           {pairingPending ? "Создаём код…" : "Привязать Telegram"}
         </button>
       </section>
-    </div>
   );
 }
 

@@ -1,0 +1,116 @@
+.cockpit {
+  --cockpit-ink: #24282b;
+  --cockpit-rule: #d6d9d5;
+  margin-bottom: clamp(1.35rem, 3vw, 2.25rem);
+  padding: clamp(1rem, 3vw, 2rem);
+  border: 1px solid var(--cockpit-rule);
+  border-radius: .875rem;
+  background: #e5e6e4;
+  color: var(--cockpit-ink);
+}
+
+.cockpit-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .7rem 1rem;
+  margin-bottom: 1.15rem;
+}
+
+.cockpit-heading h1 {
+  color: var(--cockpit-ink);
+  font-family: var(--display-type);
+  font-size: clamp(1.65rem, 3.8vw, 2.7rem);
+  font-weight: 690;
+}
+
+.cockpit-file-count {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  color: var(--muted);
+  font-size: .82rem;
+}
+
+.cockpit-file-count strong {
+  color: var(--cockpit-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.cockpit-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+  gap: .85rem;
+}
+
+.cockpit-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-width: 0;
+  gap: .75rem;
+  padding: clamp(.85rem, 2.5vw, 1.4rem);
+  border: 1px solid var(--cockpit-rule);
+  border-radius: .65rem;
+  background: #fafaf6;
+}
+
+.cockpit-panel__heading {
+  display: flex;
+  align-items: baseline;
+  gap: .55rem;
+}
+
+.cockpit-panel__heading .ui-icon { color: var(--primary); }
+
+.cockpit-panel__heading h2 {
+  font-family: var(--display-type);
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
+
+.cockpit-panel p:not(.error) {
+  color: var(--muted);
+  font-size: .9rem;
+}
+
+.cockpit-applications {
+  display: grid;
+  width: 100%;
+  margin: 0 0 .1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.cockpit-applications li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .45rem .75rem;
+  padding: .55rem 0;
+  border-bottom: 1px solid var(--cockpit-rule);
+  overflow-wrap: anywhere;
+}
+
+.cockpit-applications li > div { flex: 1 1 11rem; }
+.cockpit-applications li > div strong, .cockpit-applications li small { display: block; }
+.cockpit-applications li > div strong { font-size: .88rem; }
+
+.cockpit-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: .4rem;
+  min-height: 2.4rem;
+  margin-top: auto;
+  color: var(--primary);
+  font-size: .88rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: start;
+  text-underline-offset: .15em;
+}
+
+button.cockpit-action.button-link { min-height: 2.4rem; }

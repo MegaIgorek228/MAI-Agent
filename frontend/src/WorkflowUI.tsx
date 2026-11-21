@@ -16,15 +16,17 @@ const statusTone: Record<string, string> = {
   uploaded: "neutral"
 };
 
-export function WorkflowHeader({ title, description, children }: {
+export function WorkflowHeader({ title, description, children, level = 2 }: {
   title: string;
   description?: string;
   children?: ReactNode;
+  level?: 1 | 2;
 }) {
+  const Heading = level === 1 ? "h1" : "h2";
   return (
     <header className="workflow-heading">
       <div>
-        <h2>{title}</h2>
+        <Heading>{title}</Heading>
         {description && <p>{description}</p>}
       </div>
       {children && <div className="workflow-heading-actions">{children}</div>}

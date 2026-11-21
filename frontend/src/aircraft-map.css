@@ -1,0 +1,174 @@
+.flight-map {
+  display: grid;
+  min-width: 0;
+  margin-bottom: clamp(1.2rem, 3vw, 2.3rem);
+  border: 1px solid var(--flight-rule);
+  border-radius: 1rem;
+  background: #e5e6e3;
+  container-type: inline-size;
+}
+
+.flight-map__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .85rem clamp(1rem, 4cqi, 2.9rem) .25rem;
+}
+
+.flight-map[data-view="home"] .flight-map__heading {
+  align-items: end;
+  padding-block: clamp(1.4rem, 4cqi, 2.8rem) .35rem;
+}
+
+.flight-map__heading h1 {
+  font-size: clamp(2.35rem, 7cqi, 5.3rem);
+  font-weight: 660;
+  line-height: 1.02;
+}
+
+.flight-map__heading p { color: var(--muted); font-size: .89rem; }
+.flight-map[data-view="home"] .flight-map__heading p { max-width: 30ch; }
+
+.flight-map__back {
+  min-height: 2.5rem;
+  padding: .42rem .7rem;
+  border-color: var(--flight-rule);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: .78rem;
+}
+
+.flight-map__back:hover:not(:disabled) { background: var(--primary-soft); color: var(--primary); }
+.flight-map__back .ui-icon { transform: rotate(180deg); }
+.flight-map__current { display: inline-flex; align-items: center; gap: .45rem; }
+
+.flight-map__scene {
+  position: relative;
+  height: clamp(11rem, 37cqi, 25.5rem);
+  margin-inline: clamp(.65rem, 3.7cqi, 2.7rem);
+  transition: height .48s cubic-bezier(.2,.75,.25,1);
+}
+
+.flight-map:not([data-view="home"]) .flight-map__scene {
+  height: clamp(6.9rem, 15cqi, 10.4rem);
+}
+
+.flight-map__viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: .65rem;
+}
+
+.flight-map__model {
+  position: absolute;
+  top: 50%;
+  width: 100%;
+  translate: 0 -50%;
+  transform: translate(var(--camera-inset), -11%) scale(var(--camera-zoom));
+  transform-origin: var(--camera-point) 61%;
+  transition: transform .56s cubic-bezier(.2,.75,.25,1);
+}
+
+.flight-map[data-view="home"] .flight-map__model { transform: translate(0, 0) scale(1); }
+.flight-map__model img { display: block; width: 100%; height: auto; }
+
+.flight-map__hotspots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.flight-map__marker {
+  position: absolute;
+  top: 33%;
+  left: var(--marker-x);
+  translate: -50% -50%;
+  pointer-events: auto;
+  min-height: 2.75rem;
+  border: 1px solid #fff;
+  border-radius: 2rem;
+  background: #fafaf7;
+  color: var(--ink);
+  font-size: .79rem;
+  white-space: nowrap;
+}
+
+.flight-map__marker::after {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  height: 6.2cqi;
+  border-left: 1px solid #737c82;
+  content: "";
+  pointer-events: none;
+}
+
+.flight-map__marker::before {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: clamp(2.5rem, 11cqi, 7.4rem);
+  height: clamp(3.8rem, 13cqi, 9.25rem);
+  translate: -50% 0;
+  content: "";
+}
+
+.flight-map__marker:hover:not(:disabled) { background: var(--ink); color: #fff; }
+.flight-map__marker .ui-icon { font-size: .95rem; }
+
+.flight-map__routes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  margin: 1px clamp(.65rem, 3.7cqi, 2.7rem) clamp(.65rem, 2cqi, 1.2rem);
+  overflow: hidden;
+  border: 1px solid var(--flight-rule);
+  border-radius: .8rem;
+  background: var(--flight-panel);
+}
+
+.flight-map__route {
+  justify-content: flex-start;
+  min-width: 0;
+  min-height: 4.5rem;
+  padding: .66rem clamp(.58rem, 1.9cqi, 1.35rem);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.flight-map__route + .flight-map__route { border-left: 1px solid var(--flight-rule); }
+.flight-map__route:hover:not(:disabled), .flight-map__route[aria-current] { background: #edf2f6; color: var(--primary); }
+.flight-map__route:focus-visible { outline-offset: -3px; }
+.flight-map__route-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: .55rem;
+  background: #eaece9;
+}
+.flight-map__route-text { display: grid; gap: .19rem; min-width: 0; }
+.flight-map__route-text strong { font-size: .9rem; font-weight: 675; }
+.flight-map__route-text small { color: var(--muted); font-size: .72rem; line-height: 1.3; }
+.flight-map__route-arrow { margin-left: auto; }
+.flight-map:not([data-view="home"]) .flight-map__route { min-height: 3.2rem; }
+.flight-map:not([data-view="home"]) .flight-map__route-text small { display: none; }
+
+@container (width < 39rem) {
+  .flight-map[data-view="home"] .flight-map__heading { display: grid; justify-content: start; gap: .45rem; }
+  .flight-map[data-view="home"] .flight-map__heading p { max-width: none; font-size: .77rem; }
+  .flight-map__scene { height: clamp(10.2rem, 44cqi, 16.5rem); }
+  .flight-map__marker { top: 35%; min-width: 2.75rem; padding-inline: .35rem; }
+  .flight-map__marker span:not(.ui-icon) { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); }
+  .flight-map__marker::after { height: 4cqi; }
+  .flight-map__route { justify-content: center; min-height: 3.65rem; gap: .35rem; padding-inline: .3rem; text-align: center; }
+  .flight-map__route-icon, .flight-map__route-text small, .flight-map__route .flight-map__route-arrow { display: none; }
+  .flight-map__route-text strong { font-size: .75rem; }
+  .flight-map__heading .flight-map__current { font-size: .79rem; }
+}
