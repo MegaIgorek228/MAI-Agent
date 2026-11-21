@@ -46,6 +46,10 @@ services:
       OFFICIAL_SOURCE_ROOT_URLS: ${OFFICIAL_SOURCE_ROOT_URLS:-https://mai.ru,https://priem.mai.ru}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_POLLING_TIMEOUT_SECONDS: ${TELEGRAM_POLLING_TIMEOUT_SECONDS:-10}
+      # Hermes' tirith security scanner auto-downloads a binary from GitHub on
+      # first use; the container has no unrestricted egress and the download
+      # hangs the agent turn. Disable it (inherited by hermes-acp via env).
+      TIRITH_ENABLED: "false"
     ports:
       - "8000:8000"
     volumes:

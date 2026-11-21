@@ -13,12 +13,22 @@ dependencies = [
     "fastapi>=0.115,<1",
     "fastmcp>=2,<3",
     "email-validator>=2.2,<3",
+    # ddgs is the keyless DuckDuckGo search backend for hermes-agent's web
+    # tools. hermes gates BOTH web_search and web_extract on check_web_api_key(),
+    # which returns True when any web backend is usable; for the "ddgs" backend
+    # that check is simply "is the ddgs package importable" (no API key).
+    # Installing it lights up web_extract so the agent can fetch official
+    # MAI admission pages (priem.mai.ru) without a paid search credential.
+    "ddgs>=9,<10",
     "pgvector>=0.3,<1",
     "pydantic-settings>=2.7,<3",
     "psycopg[binary]>=3.2,<4",
     "PyJWT>=2.10,<3",
     "pwdlib[argon2]>=0.2,<1",
     "pypdf>=5,<7",
+    # Direct dependency: the MCP fetch_web_page tool strips HTML with lxml
+    # (also pulled transitively by python-docx, but declared explicitly).
+    "lxml>=5,<7",
     "python-docx>=1.1,<2",
     "Pillow>=11,<13",
     "openai>=1.60,<2",

@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -6,6 +7,14 @@ from app.config import get_settings
 from app.mcp_tools import mcp
 from app.routers import applicants, auth, chat, knowledge, users
 from app.telegram_service import telegram_service
+
+# uvicorn's default logging config covers only "uvicorn*" loggers; without an
+# explicit root handler the app's INFO logs (Telegram polling, agent calls)
+# are silently dropped. basicConfig is a no-op when handlers already exist.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 settings = get_settings()
 mcp_app = mcp.http_app()

@@ -48,18 +48,18 @@ auxiliary:
     provider: custom:mai
     reasoning_effort: low
 
-# ACP platform toolsets: same surface as the host isolated profile
-# (no vision toolset — image analysis is native multimodal).
+# ACP platform toolsets: minimal surface for a Q&A admissions agent.
+# The full agent toolset (terminal/file/code_execution/delegation/...) made
+# the model detour into filesystem exploration of the container and stretched
+# every answer to 7+ model turns (~90s). It only needs:
+#  - web          (web_extract of official pages, e.g. priem.mai.ru scores)
+#  - session_search (long chat context)
+# clarify is deliberately NOT enabled: it pauses the turn waiting for an
+# interactive answer, which the ACP backend path cannot provide (hang).
+# Clarifying questions must be asked as plain text instead.
+# MCP tools (Backend knowledge/applicants/documents) are NOT part of these
+# toolsets — they arrive via the session's mcp_servers and stay available.
 platform_toolsets:
   acp:
     - web
-    - terminal
-    - file
-    - skills
-    - todo
-    - memory
     - session_search
-    - clarify
-    - code_execution
-    - delegation
-    - connections

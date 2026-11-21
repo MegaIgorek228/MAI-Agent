@@ -22,12 +22,12 @@ def test_chat_session_and_message_lifecycle(client, monkeypatch):
         hermes_session_id: str,
         text: str,
         content_blocks: dict[str, str] | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         if content_blocks is not None:
             assert content_blocks["mime_type"] == "image/png"
             assert content_blocks["data"]
-            return "Агент получил изображение"
-        return f"Ответ: {text}"
+            return "Агент получил изображение", hermes_session_id
+        return f"Ответ: {text}", hermes_session_id
 
     monkeypatch.setattr(chat_router.hermes_manager, "start_session", start_session)
     monkeypatch.setattr(chat_router.hermes_manager, "prompt", prompt)
@@ -107,10 +107,10 @@ def test_image_prompt_uses_inline_instruction(client, monkeypatch):
         hermes_session_id: str,
         text: str,
         content_blocks: dict[str, str] | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         captured["text"] = text
         captured["content_blocks"] = content_blocks
-        return "ок"
+        return "ок", hermes_session_id
 
     monkeypatch.setattr(chat_router.hermes_manager, "start_session", start_session)
     monkeypatch.setattr(chat_router.hermes_manager, "prompt", prompt)
@@ -188,8 +188,8 @@ def test_image_history_and_file_endpoint(client, monkeypatch):
         hermes_session_id: str,
         text: str,
         content_blocks: dict[str, str] | None = None,
-    ) -> str:
-        return "ок"
+    ) -> tuple[str, str]:
+        return "ок", hermes_session_id
 
     monkeypatch.setattr(chat_router.hermes_manager, "start_session", start_session)
     monkeypatch.setattr(chat_router.hermes_manager, "prompt", prompt)

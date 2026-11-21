@@ -60,6 +60,10 @@ $RECYCLE.BIN/
 # Docker
 docker-compose.override.yml
 .docker/
+# Local dev override (remaps container postgres to host :5433; host dev DB uses :5432)
+compose.local.yml
+# E2E run artifacts
+scripts/e2e_compose_result.json
 
 # Local environment and secrets
 .env

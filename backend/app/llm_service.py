@@ -18,9 +18,15 @@ def analyze_document(text: str) -> dict[str, Any]:
             "Configure QWEN_BASE_URL, QWEN_API_KEY and QWEN_MODEL for document analysis"
         )
     http_client = httpx.Client(verify=settings.ai_api_ca_bundle or True, timeout=90)
+    # MAI relay (2026-11-21): the auth layer rejects any request carrying an
+    # `Authorization` header ("Malformed API Key") and only accepts the key in
+    # `x-api-key`. openai SDK: api_key="" suppresses the Bearer header
+    # (auth_headers property returns {} for an empty key), default_headers
+    # carries the real key as x-api-key. Verified live against the relay.
     client = OpenAI(
         base_url=settings.qwen_base_url,
-        api_key=settings.qwen_api_key,
+        api_key="",
+        default_headers={"x-api-key": settings.qwen_api_key},
         http_client=http_client,
     )
     response = client.chat.completions.create(

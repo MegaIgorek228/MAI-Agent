@@ -1,101 +1,76 @@
 # Implementation status
 
-Дата обновления: 2026-11-17
+Дата обновления: 2026-11-21
 
-## Реализовано
+## Состояние: v1.0 — рабочий штатный запуск (Docker Compose)
 
-### Roles and access
+Приложение запускается штатной конфигурацией `docker compose up`: PostgreSQL + Backend + Frontend в одном compose. Полный функциональный контур проверен живым сквозным прогоном (E2E 9/9, интеграционные тесты 19/19 в контейнере).
 
-- Добавлена роль `student` без изменения роли по умолчанию для регистрации (`applicant`).
-- Студент может использовать собственный профиль и общий чат.
-- Доступ студента к документам абитуриента пока запрещён до отдельного решения о правах.
+### Запуск
 
-### Telegram
+```bash
+# 1. Секреты (ключи НЕ коммитятся)
+cp .env.example .env   # заполнить QWEN_API_KEY, TELEGRAM_BOT_TOKEN, JWT_SECRET
 
-- Токен Telegram валидирован через Telegram Bot API: бот `mai_priem_bot` доступен.
-- В Backend добавлен polling-сервис Telegram с привязкой chat к существующему аккаунту через одноразовый код.
-- Сообщения Telegram проходят через тот же `ChatSession` и ACP/Hermes-контур.
-- Реальная отправка ответа зависит от настроенного Hermes/ACP provider.
-- Telegram polling работает в polling-режиме с одним активным потребителем `getUpdates`.
-- `/start` автоматически создаёт технический аккаунт Telegram; отдельная регистрация в Backend для начала работы не обязательна.
-- В PostgreSQL подтверждены Telegram identity записи после `/start`.
-- Причина отсутствия ответа `/start` устранена: в PostgreSQL применена миграция `0004_telegram_identity`. Telegram-offset обновляется только после успешной обработки update.
-- Hermes локальная ACP-проверка проходит (`hermes acp --check`). Реальный handshake и MCP-calls остаются заблокированы отсутствием рабочего inference provider/configuration.
-- MCP HTTP endpoint доступен и зарегистрированные tools обнаруживаются через FastMCP; живой вызов Hermes инструмента требует ACP-provider.
-- `api-ai.mai.ru` отвечает с Qwen-моделью `qwen3.8-27b` и embeddings-моделью `bge-m3`; из Docker требуется CA bundle для доверия TLS-сертификату.
-- CA bundle собран и проверен через `openssl`: `Verify return code: 0 (ok)`.
-- В Docker работают chat, embeddings и LLM-анализ документа.
+# 2. Поднять стек (postgres :5433, backend :8000, frontend :8080)
+docker compose up -d --build
 
-### Agent runtime
+# 3. Проверки
+docker compose exec backend python -m pytest tests -q   # 19/19
+python scripts/e2e_compose.py                           # 9/9 сценариев
+```
 
-- Backend содержит ACP client на официальном Python SDK `agent-client-protocol`.
-- Поддержаны операции `initialize`, `session/new`, `session/load` и `session/prompt`.
-- Идентификатор Hermes-сессии хранится в `chat_sessions.hermes_session_id`.
-- Backend API предоставляет:
-  - `POST /chat/sessions`;
-  - `GET /chat/sessions`;
-  - `GET /chat/sessions/{id}/messages`;
-  - `POST /chat/sessions/{id}/messages`.
-- Hermes получает MCP-сервер Backend через ACP `HttpMcpServer`.
-- Доверенный контекст передаётся в заголовке `X-MAI-Context` и проверяется Backend.
-- ACP SDK требует в `HttpMcpServer` поле `type="http"`; оно добавлено в adapter и проверено по реальной schema установленного SDK.
+### Что реализовано
 
-### Qwen-compatible providers
+- **Backend (FastAPI)**: учётные записи и роли (applicant/staff/student), JWT, чат-сессии, документы, требования к документам, knowledge base (pgvector + embeddings bge-m3, dim 1024), discovery/синхронизация официальных источников (mai.ru, priem.mai.ru), MCP HTTP-сервер для Hermes.
+- **Hermes через ACP** (основной протокол Backend ↔ Hermes): ACP client на SDK `agent-client-protocol==0.9.0` (в версиях 0.10+ отсутствует `ModelInfo`), изолированный профиль Hermes в `backend/hermes-profile/` (без секретов, ключ резолвится из env `OPENAI_API_KEY`), MCP-сервер Backend передаётся через `HttpMcpServer`, доверенный контекст — в заголовке `X-MAI-Context`.
+- **LLM**: Qwen3.8-27b через `https://api-ai.mai.ru/v1` (MAI relay). Vision (анализ изображений) — нативный, работает.
+- **Frontend (React/Vite + nginx)**: все 8 location-блоков, загрузка изображений, история чата с картинками, сборка в Docker-образе.
+- **Telegram**: polling **только в Backend** (бот `mai_priem_bot`), pairing chat по одноразовому коду, `/start` создаёт технический аккаунт; polling в Hermes Gateway отключён.
+- **Данные**: PostgreSQL + pgvector, миграции Alembic до `0005_chat_message_image` (FK `chat_messages.image_document_id → documents.id, ondelete SET NULL` — история чата с картинками).
 
-- Добавлен OpenAI-compatible provider для Qwen document analysis.
-- Добавлен OpenAI-compatible provider для embeddings.
-- Выбрана размерность embeddings `1024`, совместимая с `Qwen/Qwen3-Embedding-0.6B`.
-- При отсутствии endpoint или ключей возвращается явная ошибка `503`; фиктивные ответы не используются.
+### Авторизация MAI relay: x-api-key (изменение 2026-11-21)
 
-### Knowledge base
+MAI relay c ~17:30 2026-11-21 принимает **только** заголовок `x-api-key` и отдаёт 401 «Malformed API Key» на любой запрос с `Authorization: Bearer` (включая оба заголовка сразу). TLS-цепочка сертификатов не менялась (совпадает с собранным CA bundle побайтово), mTLS не требуется, ключ валиден.
 
-- Добавлен cosine similarity search в PostgreSQL/pgvector при настроенном embedding provider.
-- Без provider сохраняется только временный lexical fallback для локальной разработки.
-- Добавлена синхронизация официальных материалов по явно переданным HTTPS URL.
-- URL разрешаются только для доменов из `OFFICIAL_SOURCE_DOMAINS`.
-- Добавлен ограниченный discovery ссылок с корневых URL `mai.ru` и `priem.mai.ru`; результаты доступны сотрудникам через `/knowledge/sources/discover` и требуют последующей синхронизации.
-- Реализована дедупликация по URL и hash.
+Исправление в 4 точках (без изменения архитектуры):
+1. `backend/app/llm_service.py` — `api_key=""` (подавляет Bearer в openai SDK) + `default_headers={"x-api-key": ...}`.
+2. `backend/app/embedding_service.py` — то же.
+3. `backend/hermes-profile/plugins/model-providers/custom/__init__.py` (контейнер) — плагин уровня пользователя: in-place patch `openai.OpenAI/AsyncOpenAI.__init__` (перенос ключа в `x-api-key` для MAI-хоста) **и** patch `httpx.Client/AsyncClient.send` — универсальный chokepoint: любой запрос к `api-ai.mai.ru` получает `x-api-key` из env и теряет `Authorization`. Второй слой нужен, т.к. vision-роутер Hermes (`resolve_vision_provider_client`) строит клиентов с пустым ключом (named custom provider не резолвит `key_env` на этом пути).
+4. Изолированный профиль хоста (`%LOCALAPPDATA%\MAI-Agent\acp\plugins\model-providers\custom\__init__.py`) — те же два патча.
 
-### Documents and admission requirements
+Также в профиле Hermes: override `reasoning_effort` (MAI relay принимает `xhigh/medium/low`, `none` даёт 400) и aux-слоты → `custom:mai`.
 
-- Добавлена таблица требований к документам.
-- Проверка комплектности учитывает:
-  - `document_type`;
-  - направление подготовки;
-  - основание поступления.
-- Добавлен `POST /applicant/documents/{id}/analyze` для анализа через Qwen-compatible endpoint.
-- Добавлен административный endpoint создания требований:
-  - `POST /knowledge/admission-requirements`.
+### Поведение агента: скорость, формат, доступ к данным (2026-11-21, вечер)
 
-### Frontend
+После стабилизации авторизации устранены три проблемы, отмеченные пользователем: Markdown в ответах, длительность ~90 с и отсутствие данных.
 
-- Раздел «Агент» теперь создаёт chat session и отправляет сообщения через Backend API.
-- Добавлена отрисовка истории текущего диалога.
+- **Формат — plain text**: `backend/hermes-profile/SOUL.md` (манифест идентичности агента) запрещает весь Markdown (`**`, таблицы, списки, `[..](url)`, бэктиксы), требует 2–5 предложений, запрещает односложные ответы. SOUL.md зеркалируется в изолированный профиль хоста.
+- **Скорость**: stock-пресет toolset `hermes-acp` (terminal/file/browser/skills/delegation) заставлял модель «копать» файловую систему контейнера (10+ вызовов модели, 91–118 с + фоновый skill-review ещё ~100 с). `platform_toolsets.acp` в config.yaml в 0.19.0 **игнорируется** ACP-адаптером (хардкод `enabled_toolsets=["hermes-acp"]`). Решение на уровне плагина (без правки исходных): `_install_mai_acp_toolset_override()` в `plugins/model-providers/custom/__init__.py` переопределяет `TOOLSETS["hermes-acp"]` → `tools=["session_search"]`. Итог: 2–4 вызова модели, ~6–30 с на ответ с данными.
+- **Доступ к данным — MCP-инструмент `fetch_web_page`** (`backend/app/mcp_tools.py`): Hermes web-инструменты в контейнере неработоспособны (web_extract требует платный extract-бэкенд firecrawl/tavily/exa/parallel; web_search на безключевом ddgs с этой сети не отвечает), поэтому агент открывает официальные страницы через Backend MCP: https-only, SSRF-защита (`getaddrinfo` + `ipaddress.is_global` на каждый IP, ручные редиректы ≤5 с повторной валидацией), timeout 25 с, лимиты 2 МБ тела / 25k символов, HTML→text через lxml. В docstring — навигационная карта страниц priem.mai.ru (проходные баллы `/base/score/`, направления, цены, результаты приёма 2026, дедлайны, календарь).
+- **ACP stdio reader 64KB → 50MB** (`backend/app/hermes_client.py::_start`): кадр JSON-RPC с крупным результатом инструмента (страница ~30–60KB, base64-изображения) превышал стандартный лимит StreamReader и ронял соединение (`LimitOverrunError` → 503). Ридер протокола сабпроцесса (`proto.stdout`) заменяется на `StreamReader(limit=50MB)` — тот же лимит, что и в самом acp SDK (`acp.core.DEFAULT_STDIO_BUFFER_LIMIT_BYTES`).
+- **Stale-session fallback** (`hermes_client.py`): `prompt()` возвращает `(text, hermes_session_id)`; на пустой ответ создаётся новая сессия и делается одна повторная попытка; новый ID персистится вызывающими (`routers/chat.py`, `telegram_service.py`).
+- **Наблюдаемость**: `logging.basicConfig(level=INFO)` в `app/main.py`, INFO-логи telegram-потока (update → prompt → answer, тайминги), stale-update guard (>5 мин — skip).
+- **TIRITH отключён** (`TIRITH_ENABLED: "false"` в compose backend environment): автозагрузка бинарника с GitHub в контейнере без egress вешала ход агента на ~10 минут.
+- **`ddgs>=9` в `backend/pyproject.toml`**: безключевой search-бэкенд, открывающий гейт `check_web_api_key` (сам toolset web-инструменты не включает).
 
-## Проверки
+### Проверенные результаты (2026-11-21, Docker)
 
-- Ruff: успешно.
-- Pytest: 7 тестов успешно.
-- Alembic chain на SQLite: успешно до `0003_agent_integrations`.
-- `hermes-acp --check`: успешно.
-- Hermes Agent локально установлен, версия `0.23.1`.
-- Frontend build через локальный `npm` не выполнен: `npm` отсутствует в PATH текущей среды.
-- Backend/Frontend Docker build: успешно.
-- Docker Compose PostgreSQL smoke test и migration до `0003_agent_integrations`: успешно.
+- Backend host: `pytest` — **19/19 passed**.
+- Backend container: `pytest` — **19/19 passed** (в цепочке после сборки).
+- E2E `scripts/e2e_compose.py` — **9/9** (финальный прогон после всех фиксов, включая vision-сценарий: red circle + blue rectangle assertions PASS — подтверждает работу 50MB ACP-ридера на base64-кадрах).
+- Live-вопрос «Проходные баллы на ПМИ в 2026» через API: **5.7 с**, ответ с реальными цифрами (01.03.02 «Прикладная математика и информатика»: 289/289/217, сверено с таблицей на priem.mai.ru/base/score/), plain text, корректный вуз (МАИ). До серии фиксов: 91–118 с и/или «данные недоступны».
+- Текст-чат без данных: ~13–28 с (2–4 API-вызова); до фикса — 91–118 с (10+ вызовов).
+- Ошибок 400 по `reasoning_effort`, 401 по авторизации relay: отсутствуют.
+- `hermes acp --check` — успешно.
 
-## Ограничения и блокеры
+### Telegram: живая приёмка
 
-1. Реальный ACP handshake с установленным Hermes в текущей Windows-среде не завершился: процесс Hermes дошёл до регистрации plugins, но не ответил на `initialize` в течение 30–45 секунд. В Backend добавлен таймаут ACP и явная ошибка вместо бесконечного ожидания. Требуется проверить запуск Hermes через его управляемое окружение/PM и наличие настроенного provider.
-2. Qwen endpoint и модель настроены в локальном `.env`; Backend из Docker пока блокируется `CERTIFICATE_VERIFY_FAILED` до подключения `AI_API_CA_BUNDLE`.
-3. Embeddings настроены на тот же endpoint (`bge-m3`, размерность 1024); параметр `dimensions` не передается, так как LiteLLM не поддерживает его для этой модели.
-4. Официальные домены по умолчанию ограничены `mai.ru` и `priem.mai.ru`; discovery корневых страниц подготовлен. Реальный smoke-тест из текущей среды завершился `httpx.ConnectTimeout`, поэтому получение материалов требует сетевого доступа к сайтам.
-5. Telegram Gateway/Bot API ещё не подключён. Официальное описание Hermes подтверждает Gateway как самостоятельную интеграцию Hermes на `python-telegram-bot`, но его связь с JWT-авторизацией Backend и текущим ACP-контуром нужно проверить экспериментально.
-6. ФИС ГИА не реализуется без официальной документации, авторизации и тестового контура.
+- Бот `mai_priem_bot`, токен в `.env`, webhook не установлен; polling активен в backend-контейнере.
+- Текст-путь готов к живой приёмке (x-api-key фикс). Vision-путь зафиксирован httpx-патчем (см. выше), финальная живая проверка фото в Telegram — следующий шаг.
 
-## Следующий этап
+## Ограничения
 
-- Проверить Hermes ACP в его штатном Python/PM runtime с настроенным provider.
-- Подключить Qwen inference и embeddings endpoint.
-- Выполнить интеграционный тест: Frontend → Backend → ACP → Hermes → MCP → Backend.
-- Повторить discovery/синхронизацию из сети с доступом к `mai.ru` и `priem.mai.ru`, затем загрузить утверждённые admission requirements.
-- Настроить Hermes Gateway через `hermes gateway setup` и проверить Telegram до выбора резервного Bot API.
+1. ФИС ГИА не реализована (нет официальной документации/контура).
+2. MAI relay — внешняя зависимость: смена схемы авторизации (как 2026-11-21) требует повторного фикса в 4 точках (паттерн задокументирован выше).
+3. Discovery `mai.ru`/`priem.mai.ru` ограничен сетевым доступом из среды запуска.

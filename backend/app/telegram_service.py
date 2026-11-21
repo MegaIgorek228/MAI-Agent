@@ -90,7 +90,16 @@ class TelegramService:
                         logger.error("Telegram getUpdates returned an error")
                         await asyncio.sleep(2)
                         continue
-                    for update in data.get("result", []):
+                    updates = data.get("result", [])
+                    if updates:
+                        logger.info(
+                            "Telegram getUpdates: %d update(s) (ids %s..%s), local offset was %d",
+                            len(updates),
+                            updates[0]["update_id"],
+                            updates[-1]["update_id"],
+                            offset,
+                        )
+                    for update in updates:
                         update_id = int(update["update_id"])
                         try:
                             await self._handle_update(token, update)
@@ -114,12 +123,37 @@ class TelegramService:
         chat_id = str(chat.get("id", ""))
         text = str(message.get("text", "")).strip()
         photos = message.get("photo") or []
+        update_date = int(message.get("date", 0) or 0)
         if photos:
             caption = str(message.get("caption", "")).strip()
+            logger.info(
+                "Telegram update %s: PHOTO from chat=%s caption=%r",
+                update.get("update_id"), chat_id, caption[:80],
+            )
             await self._handle_photo(token, chat_id, photos, caption)
             return
         if not chat_id or not text:
+            logger.info(
+                "Telegram update %s: ignored (chat=%s, no text/photo)",
+                update.get("update_id"), chat_id,
+            )
             return
+        # Защита от повторной обработки истории после рестарта контейнера:
+        # getUpdates с offset=0 возвращает всю накопившуюся историю, и каждый
+        # старый текст запускает полноценный LLM-вызов, блокируя очередь живых
+        # сообщений. Обновения старше 5 минут пропускаем (offset при этом
+        # корректно продвигается).
+        now_ts = int(datetime.now(UTC).timestamp())
+        if update_date and (now_ts - update_date) > 300:
+            logger.warning(
+                "Telegram update %s skipped: stale (age %ds), text=%r",
+                update.get("update_id"), now_ts - update_date, text[:80],
+            )
+            return
+        logger.info(
+            "Telegram update %s: TEXT from chat=%s age=%ds text=%r",
+            update.get("update_id"), chat_id, now_ts - update_date if update_date else -1, text[:120],
+        )
 
         if text.startswith("/start"):
             await self._start_user(token, chat_id)
@@ -283,6 +317,11 @@ class TelegramService:
         text: str,
         content_blocks: dict[str, str] | None = None,
     ) -> None:
+        t0 = datetime.now(UTC)
+        logger.info(
+            "Telegram answer start: chat=%s with_image=%s text=%r",
+            chat_id, content_blocks is not None, text[:120],
+        )
         db = SessionLocal()
         try:
             identity = db.scalar(
@@ -334,8 +373,10 @@ class TelegramService:
             prompt_text = (
                 with_image_instruction(text) if content_blocks is not None else text
             )
+            logger.info("Telegram hermes prompt start: session=%s", session.id)
+            t1 = datetime.now(UTC)
             try:
-                response = await hermes_manager.prompt(
+                response, used_hermes_session_id = await hermes_manager.prompt(
                     user.id,
                     session.id,
                     session.hermes_session_id,
@@ -343,8 +384,22 @@ class TelegramService:
                     content_blocks=content_blocks,
                 )
             except HermesUnavailableError as exc:
+                logger.warning(
+                    "Telegram hermes prompt failed after %s: %s",
+                    (datetime.now(UTC) - t1).total_seconds(), exc,
+                )
                 await self._send(token, chat_id, f"Агент временно недоступен: {exc}")
                 return
+            logger.info(
+                "Telegram hermes prompt done in %.1fs, response_len=%d",
+                (datetime.now(UTC) - t1).total_seconds(), len(response or ""),
+            )
+            if used_hermes_session_id and used_hermes_session_id != session.hermes_session_id:
+                # Stale session after a restart: the manager fell back to a
+                # fresh hermes session — persist it for the next message.
+                session.hermes_session_id = used_hermes_session_id
+                db.commit()
+                logger.info("Telegram session %s re-bound to hermes session %s", session.id, used_hermes_session_id)
             if not response:
                 await self._send(token, chat_id, "Hermes вернул пустой ответ.")
                 return
@@ -353,6 +408,10 @@ class TelegramService:
         finally:
             db.close()
         await self._send(token, chat_id, response)
+        logger.info(
+            "Telegram answer complete in %.1fs: chat=%s",
+            (datetime.now(UTC) - t0).total_seconds(), chat_id,
+        )
 
 
 telegram_service = TelegramService()

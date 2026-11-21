@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,8 @@ from acp.schema import (
 
 from app.config import get_settings
 from app.security import create_trusted_context
+
+logger = logging.getLogger(__name__)
 
 
 class HermesUnavailableError(RuntimeError):
@@ -98,9 +101,35 @@ class HermesClientManager:
         if process.stdin is None or process.stdout is None:
             raise HermesUnavailableError("Hermes ACP process did not expose stdio pipes")
 
+        # ACP frames are newline-delimited JSON; a single frame can exceed
+        # asyncio's default 64 KB StreamReader line limit (a fetched page's
+        # text as a tool result is ~30-60 KB, base64 image payloads are more),
+        # which crashed the connection with LimitOverrunError -> 503. The acp
+        # SDK reads its own streams with a 50 MB limit for exactly this reason
+        # (acp.core.DEFAULT_STDIO_BUFFER_LIMIT_BYTES). Replace the stdout
+        # reader created by the subprocess protocol (64 KB) with an equally
+        # sized one before the first frame arrives: pipe_data_received() feeds
+        # proto.stdout, and pipe_connection_lost() feeds EOF into it too.
+        stdout_reader = process.stdout
+        try:
+            from acp.core import DEFAULT_STDIO_BUFFER_LIMIT_BYTES
+
+            proto = process._transport.get_protocol()  # SubprocessStreamProtocol
+            old_reader = proto.stdout
+            big_reader = asyncio.StreamReader(limit=DEFAULT_STDIO_BUFFER_LIMIT_BYTES)
+            big_reader.set_transport(old_reader._transport)  # keep backpressure wiring
+            proto.stdout = big_reader
+            stdout_reader = big_reader
+        except (AttributeError, ImportError):
+            # asyncio/acp internals changed — keep the stock reader (degrades
+            # only on >64 KB frames, never blocks the connection).
+            logger.warning(
+                "Could not enlarge ACP stdout reader; keeping default line limit"
+            )
+
         callbacks = HermesCallbacks()
         connection = connect_to_agent(
-            callbacks, process.stdin, process.stdout, use_unstable_protocol=True
+            callbacks, process.stdin, stdout_reader, use_unstable_protocol=True
         )
         try:
             await asyncio.wait_for(
@@ -165,7 +194,17 @@ class HermesClientManager:
         hermes_session_id: str,
         text: str,
         content_blocks: dict[str, str] | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
+        """Send a prompt and return ``(response_text, hermes_session_id)``.
+
+        The returned session id is the one actually in use: normally the
+        passed-in id, but after a backend/container restart the stored
+        hermes session id no longer exists in the fresh Hermes state —
+        ``load_session`` accepts it, yet the prompt is answered with
+        ``stop_reason="refusal"`` and zero chunks. In that case we create a
+        fresh session, retry once, and hand the new id back so the caller
+        can persist it.
+        """
         async with self._lock_for(app_session_id):
             process_entry = self._processes.get(app_session_id)
             if process_entry is None or process_entry.process.returncode is not None:
@@ -173,33 +212,61 @@ class HermesClientManager:
                     user_id, app_session_id, hermes_session_id
                 )
                 self._processes[app_session_id] = process_entry
-            process_entry.callbacks.messages.clear()
-            prompt_blocks: list[Any] = [TextContentBlock(type="text", text=text)]
-            if content_blocks is not None:
-                prompt_blocks.append(
-                    ImageContentBlock(
-                        type="image",
-                        data=content_blocks["data"],
-                        mime_type=content_blocks["mime_type"],
-                    )
+            response_text, used_session_id = await self._prompt_once(
+                process_entry, hermes_session_id, text, content_blocks, app_session_id
+            )
+            if not response_text and process_entry.process.returncode is None:
+                logger.warning(
+                    "Hermes returned an empty response for stale session %s "
+                    "(app session %s); retrying with a fresh session",
+                    hermes_session_id, app_session_id,
                 )
-            try:
-                response = await asyncio.wait_for(
-                    process_entry.connection.prompt(
-                        session_id=hermes_session_id,
-                        prompt=prompt_blocks,
-                    ),
-                    timeout=get_settings().acp_prompt_timeout_seconds,
+                process_entry, fresh_session_id = await self._start(
+                    user_id, app_session_id, None
                 )
-            except TimeoutError as exc:
-                await self.close(app_session_id)
-                raise HermesUnavailableError("Hermes ACP prompt timed out") from exc
-            except Exception as exc:
-                await self.close(app_session_id)
-                raise HermesUnavailableError("Hermes ACP prompt failed") from exc
-            if response.stop_reason == "cancelled":
-                raise HermesUnavailableError("Hermes ACP prompt was cancelled")
-            return "".join(process_entry.callbacks.messages).strip()
+                self._processes[app_session_id] = process_entry
+                response_text, used_session_id = await self._prompt_once(
+                    process_entry, fresh_session_id, text, content_blocks, app_session_id
+                )
+            return response_text, used_session_id
+
+    async def _prompt_once(
+        self,
+        process_entry: HermesProcess,
+        hermes_session_id: str,
+        text: str,
+        content_blocks: dict[str, str] | None,
+        app_session_id: int,
+    ) -> tuple[str, str]:
+        process_entry.callbacks.messages.clear()
+        prompt_blocks: list[Any] = [TextContentBlock(type="text", text=text)]
+        if content_blocks is not None:
+            prompt_blocks.append(
+                ImageContentBlock(
+                    type="image",
+                    data=content_blocks["data"],
+                    mime_type=content_blocks["mime_type"],
+                )
+            )
+        try:
+            response = await asyncio.wait_for(
+                process_entry.connection.prompt(
+                    session_id=hermes_session_id,
+                    prompt=prompt_blocks,
+                ),
+                timeout=get_settings().acp_prompt_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            await self.close(app_session_id)
+            raise HermesUnavailableError("Hermes ACP prompt timed out") from exc
+        except Exception as exc:
+            await self.close(app_session_id)
+            raise HermesUnavailableError("Hermes ACP prompt failed") from exc
+        if response.stop_reason == "cancelled":
+            raise HermesUnavailableError("Hermes ACP prompt was cancelled")
+        if response.stop_reason not in ("end_turn", "max_tokens"):
+            logger.warning("Hermes ACP prompt stop_reason=%s", response.stop_reason)
+        return "".join(process_entry.callbacks.messages).strip(), hermes_session_id
 
     async def close(self, app_session_id: int) -> None:
         process_entry = self._processes.pop(app_session_id, None)

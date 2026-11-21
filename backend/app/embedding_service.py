@@ -15,9 +15,13 @@ def _client() -> OpenAI:
             "Configure EMBEDDING_BASE_URL and EMBEDDING_API_KEY for semantic search"
         )
     http_client = httpx.Client(verify=settings.ai_api_ca_bundle or True, timeout=90)
+    # MAI relay (2026-11-21): rejects requests with an `Authorization` header;
+    # auth goes via `x-api-key` only. api_key="" makes the openai SDK omit the
+    # Bearer header; the real key travels in default_headers (see llm_service).
     return OpenAI(
         base_url=settings.embedding_base_url,
-        api_key=settings.embedding_api_key,
+        api_key="",
+        default_headers={"x-api-key": settings.embedding_api_key},
         http_client=http_client,
     )
 

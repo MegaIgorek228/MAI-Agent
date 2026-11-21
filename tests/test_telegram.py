@@ -111,10 +111,10 @@ def _install_fake_hermes(monkeypatch, captured: dict) -> None:
         hermes_session_id: str,
         text: str,
         content_blocks: dict | None = None,
-    ) -> str:
+    ) -> tuple[str, str]:
         captured["text"] = text
         captured["content_blocks"] = content_blocks
-        return "ответ-агента"
+        return "ответ-агента", hermes_session_id
 
     monkeypatch.setattr(hermes_manager, "start_session", fake_start_session)
     monkeypatch.setattr(hermes_manager, "prompt", fake_prompt)

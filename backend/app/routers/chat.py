@@ -140,7 +140,7 @@ async def send_message(
     )
     db.commit()
     try:
-        response = await hermes_manager.prompt(
+        response, used_hermes_session_id = await hermes_manager.prompt(
             current_user.id,
             session.id,
             session.hermes_session_id,
@@ -149,6 +149,11 @@ async def send_message(
         )
     except HermesUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if used_hermes_session_id and used_hermes_session_id != session.hermes_session_id:
+        # Stale session after a restart: the manager fell back to a fresh
+        # hermes session — persist it for the next message.
+        session.hermes_session_id = used_hermes_session_id
+        db.commit()
     if not response:
         raise HTTPException(status_code=502, detail="Hermes returned an empty response")
     db.add(ChatMessage(session_id=session.id, role="assistant", content=response))
