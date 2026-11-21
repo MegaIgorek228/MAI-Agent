@@ -15,6 +15,8 @@ import {
 } from "./api";
 import { ApplicationHistory, applicationStatus, Requirements, Verification } from "./Admissions";
 import { documentStatusLabel, requestErrorMessage } from "./Documents";
+import { Icon } from "./Icon";
+import { WorkflowEmpty, WorkflowHeader, WorkflowNotice, WorkflowStatus } from "./WorkflowUI";
 
 const pageSize = 20;
 
@@ -61,12 +63,12 @@ export function StaffApplications({ token }: { token: string }) {
   };
 
   return (
-    <div className="view-stack">
-      <h2>Рабочее место сотрудника</h2>
-      <div className="actions">
-        <button type="button" aria-pressed={mode === "applications"} onClick={() => setMode("applications")}>Заявления</button>
-        <button type="button" aria-pressed={mode === "applicants"} onClick={() => setMode("applicants")}>Абитуриенты</button>
-        <button type="button" aria-pressed={mode === "rules"} onClick={() => setMode("rules")}>Правила приёма</button>
+    <div className="workflow">
+      <WorkflowHeader title="Рабочее место сотрудника" description="Проверяйте заявления и документы и публикуйте правила приёма." />
+      <div className="workflow-tabs" role="group" aria-label="Раздел рабочего места">
+        <button type="button" aria-pressed={mode === "applications"} onClick={() => setMode("applications")}><Icon name="folder" /> Заявления</button>
+        <button type="button" aria-pressed={mode === "applicants"} onClick={() => setMode("applicants")}><Icon name="user" /> Абитуриенты</button>
+        <button type="button" aria-pressed={mode === "rules"} onClick={() => setMode("rules")}><Icon name="book" /> Правила приёма</button>
       </div>
       {mode === "rules" && <AdmissionRuleEditor token={token} />}
       {mode === "applicants" && <StaffApplicantList token={token} onOpen={(applicant) => {
@@ -76,8 +78,11 @@ export function StaffApplications({ token }: { token: string }) {
       }} />}
       {mode === "applications" && (
         <>
-          <form onSubmit={applyFilters}>
-            <div className="form-columns">
+          <section className="workflow-panel workflow-queue" aria-labelledby="queue-heading">
+            <div className="workflow-panel-heading">
+              <h3 id="queue-heading">Очередь заявлений</h3>
+            </div>
+            <form className="workflow-queue-filter" onSubmit={applyFilters}>
               <label>
                 Поиск заявлений
                 <input name="query" defaultValue={filters.query} placeholder="Email или направление" />
@@ -90,35 +95,43 @@ export function StaffApplications({ token }: { token: string }) {
                     .map(([value, label]) => <option key={value} value={value}>{label}</option>)}
                 </select>
               </label>
-            </div>
-            <div className="actions"><button type="submit" disabled={pending}>Найти</button></div>
-          </form>
-          {pending && <p role="status">Загрузка заявлений…</p>}
-          {error && <p className="error" role="alert">{error}</p>}
-          {!pending && !error && applications.length === 0 && <p>Заявлений по этим условиям нет.</p>}
-          {applications.length > 0 && (
-            <ul className="application-list">
-              {applications.map((item) => (
-                <li key={item.id}>
-                  <button type="button" aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
-                    №{item.id} · {item.program} · {applicationStatus[item.status]}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-          {(filters.offset > 0 || applications.length === pageSize) && (
-            <div className="actions">
-              <button type="button" disabled={pending || filters.offset === 0} onClick={() => {
-                setSelected(null);
-                setFilters((current) => ({ ...current, offset: current.offset - pageSize }));
-              }}>Предыдущая страница</button>
-              <button type="button" disabled={pending || applications.length < pageSize} onClick={() => {
-                setSelected(null);
-                setFilters((current) => ({ ...current, offset: current.offset + pageSize }));
-              }}>Следующая страница</button>
-            </div>
-          )}
+              <button type="submit" disabled={pending}><Icon name="search" /> Найти</button>
+            </form>
+            {pending && <p role="status" className="workflow-muted">Загрузка заявлений…</p>}
+            {error && <p className="error" role="alert">{error}</p>}
+            {!pending && !error && applications.length === 0 && (
+              <WorkflowEmpty title="Заявлений по этим условиям нет" description="Измените параметры поиска, чтобы увидеть другие заявления." icon="search" />
+            )}
+            {applications.length > 0 && (
+              <ul className="workflow-list workflow-queue-list">
+                {applications.map((item) => (
+                  <li key={item.id}>
+                    <button className="workflow-queue-row" type="button" aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
+                      <span className="workflow-mark"><Icon name="file" /></span>
+                      <span className="workflow-row-main">
+                        <span>№{item.id} · {item.program}</span>
+                        <small>{item.campaign_year} · {item.admission_basis}</small>
+                      </span>
+                      <WorkflowStatus status={item.status}>{applicationStatus[item.status]}</WorkflowStatus>
+                      <Icon name="chevron-right" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(filters.offset > 0 || applications.length === pageSize) && (
+              <div className="workflow-actions">
+                <button className="workflow-secondary" type="button" disabled={pending || filters.offset === 0} onClick={() => {
+                  setSelected(null);
+                  setFilters((current) => ({ ...current, offset: current.offset - pageSize }));
+                }}>Предыдущая страница</button>
+                <button className="workflow-secondary" type="button" disabled={pending || applications.length < pageSize} onClick={() => {
+                  setSelected(null);
+                  setFilters((current) => ({ ...current, offset: current.offset + pageSize }));
+                }}>Следующая страница</button>
+              </div>
+            )}
+          </section>
           {selected !== null && <StaffApplicationDetail key={selected} token={token} id={selected} onUpdate={onUpdate} />}
         </>
       )}
@@ -140,18 +153,33 @@ function StaffApplicantList({ token, onOpen }: { token: string; onOpen: (applica
     return () => { ignore = true; };
   }, [token]);
 
-  if (error) return <p role="alert" className="error">{error}</p>;
-  if (!applicants) return <p role="status">Загрузка абитуриентов…</p>;
-  if (applicants.length === 0) return <p>Абитуриентов пока нет.</p>;
   return (
-    <ul className="application-list">
-      {applicants.map((applicant) => (
-        <li key={applicant.id}>
-          <button type="button" onClick={() => onOpen(applicant)}>{applicant.email}</button>
-          {!applicant.is_active && <small>Учётная запись неактивна.</small>}
-        </li>
-      ))}
-    </ul>
+    <section className="workflow-panel" aria-labelledby="applicants-heading">
+      <div className="workflow-panel-heading">
+        <h3 id="applicants-heading">Абитуриенты</h3>
+        {Boolean(applicants?.length) && <span className="workflow-count">{applicants?.length}</span>}
+      </div>
+      {error ? <p role="alert" className="error">{error}</p> : !applicants ? (
+        <p role="status" className="workflow-muted">Загрузка абитуриентов…</p>
+      ) : applicants.length === 0 ? (
+        <WorkflowEmpty title="Абитуриентов пока нет" />
+      ) : (
+        <ul className="workflow-list workflow-queue-list">
+          {applicants.map((applicant) => (
+            <li key={applicant.id}>
+              <button className="workflow-queue-row" type="button" onClick={() => onOpen(applicant)}>
+                <span className="workflow-mark"><Icon name="user" /></span>
+                <span className="workflow-row-main">
+                  <span>{applicant.email}</span>
+                  {!applicant.is_active && <small>Учётная запись неактивна</small>}
+                </span>
+                <Icon name="chevron-right" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -233,52 +261,71 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
   const statuses = nextStatuses[application.status] ?? [];
 
   return (
-    <section className="record view-stack">
-      <h3>Заявление №{application.id}</h3>
-      <p>{applicant.email} · {application.campaign_year} · {application.program} · {application.admission_basis}</p>
-      <p><strong>{applicationStatus[application.status]}</strong></p>
+    <section className="workflow-panel workflow-editor">
+      <div className="workflow-panel-heading">
+        <div>
+          <h3>Заявление №{application.id}</h3>
+          <p className="workflow-muted">{applicant.email} · {application.campaign_year} · {application.program} · {application.admission_basis}</p>
+        </div>
+        <WorkflowStatus status={application.status}>{applicationStatus[application.status]}</WorkflowStatus>
+      </div>
       {application.review_note && <p className="notice">{application.review_note}</p>}
       {pending && <p role="status">Запрос выполняется…</p>}
       {error && <p className="error" role="alert">{error}</p>}
       <Requirements result={requirements} />
-      <h3>Заявленные результаты ЕГЭ</h3>
-      {ege.scores.length > 0
-        ? <ul>{ege.scores.map((score) => <li key={`${score.subject}-${score.year}`}>{score.subject} · {score.year} · {score.score}</li>)}</ul>
-        : <p>Баллы ещё не введены.</p>}
-      <Verification verification={ege.verification} />
-      <h3>Документы заявления</h3>
-      {documents.length === 0 && <p>К заявлению не приложены документы.</p>}
-      {documents.map((document) => (
-        <article className="record view-stack" key={document.id}>
-          <h4>{document.filename}</h4>
-          <p>{document.document_type ?? "Тип не указан"} · {documentStatusLabel(document.status)}</p>
-          {document.review_message && <p>{document.review_message}</p>}
-          <div className="actions">
-            <button type="button" disabled={pending} onClick={() => download(document.id, document.filename)}>Скачать файл</button>
-          </div>
-          {document.extracted_text && <details><summary>Извлечённый текст</summary><pre>{document.extracted_text}</pre></details>}
-          {application.status === "under_review" && (
-            <form onSubmit={(event) => setDocumentStatus(event, document.id)}>
-              <div className="form-columns">
-                <label>
-                  Результат проверки
-                  <select name="status" defaultValue={document.status === "rejected" ? "rejected" : "accepted"}>
-                    <option value="accepted">Принять файл</option>
-                    <option value="rejected">Отклонить файл</option>
-                  </select>
-                </label>
-                <label>
-                  Комментарий к документу
-                  <input name="note" maxLength={2000} defaultValue={document.review_message ?? ""} />
-                </label>
+      <section className="workflow-subsection">
+        <h4>Заявленные результаты ЕГЭ</h4>
+        {ege.scores.length > 0
+          ? <dl className="workflow-staff-scores">{ege.scores.map((score) => (
+            <div key={`${score.subject}-${score.year}`}>
+              <dt>{score.subject} <small>{score.year}</small></dt>
+              <dd>{score.score}</dd>
+            </div>
+          ))}</dl>
+          : <p className="workflow-muted">Баллы ещё не введены.</p>}
+        <Verification verification={ege.verification} />
+      </section>
+      <section className="workflow-subsection">
+        <h4>Документы заявления</h4>
+        {documents.length === 0 && <p className="workflow-muted">К заявлению не приложены документы.</p>}
+        {documents.map((document) => (
+          <article className="workflow-document-review" key={document.id}>
+            <div className="workflow-file-name">
+              <span className="workflow-mark"><Icon name="file" /></span>
+              <div>
+                <h5>{document.filename}</h5>
+                <small>{document.document_type ?? "Тип не указан"}</small>
               </div>
-              <div className="actions"><button type="submit" disabled={pending}>Сохранить проверку</button></div>
-            </form>
-          )}
-        </article>
-      ))}
+              <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
+            </div>
+            {document.review_message && <p className="workflow-muted">{document.review_message}</p>}
+            <div className="workflow-actions">
+              <button className="workflow-secondary" type="button" disabled={pending} onClick={() => download(document.id, document.filename)}>Скачать файл</button>
+            </div>
+            {document.extracted_text && <details className="workflow-disclosure"><summary>Извлечённый текст</summary><pre>{document.extracted_text}</pre></details>}
+            {application.status === "under_review" && (
+              <form onSubmit={(event) => setDocumentStatus(event, document.id)}>
+                <div className="form-columns">
+                  <label>
+                    Результат проверки
+                    <select name="status" defaultValue={document.status === "rejected" ? "rejected" : "accepted"}>
+                      <option value="accepted">Принять файл</option>
+                      <option value="rejected">Отклонить файл</option>
+                    </select>
+                  </label>
+                  <label>
+                    Комментарий к документу
+                    <input name="note" maxLength={2000} defaultValue={document.review_message ?? ""} />
+                  </label>
+                </div>
+                <div className="workflow-actions"><button type="submit" disabled={pending}>Сохранить проверку</button></div>
+              </form>
+            )}
+          </article>
+        ))}
+      </section>
       {statuses.length > 0 && (
-        <form onSubmit={setStatus} key={application.status}>
+        <form onSubmit={setStatus} key={application.status} className="workflow-subsection">
           <div className="form-columns">
             <label>
               Новый статус заявления
@@ -291,11 +338,11 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
               <input name="note" maxLength={2000} defaultValue={application.review_note ?? ""} />
             </label>
           </div>
-          <div className="actions"><button type="submit" disabled={pending}>Сохранить статус</button></div>
+          <div className="workflow-actions"><button type="submit" disabled={pending}>Сохранить статус</button></div>
         </form>
       )}
       {detail.history.length > 0 && (
-        <details><summary>История заявления</summary><ApplicationHistory events={detail.history} /></details>
+        <details className="workflow-disclosure"><summary>История заявления</summary><ApplicationHistory events={detail.history} /></details>
       )}
     </section>
   );
@@ -340,8 +387,8 @@ function AdmissionRuleEditor({ token }: { token: string }) {
   };
 
   return (
-    <section className="record view-stack">
-      <h3>Новая редакция правил приёма</h3>
+    <section className="workflow-panel workflow-editor">
+      <div className="workflow-panel-heading"><h3>Новая редакция правил приёма</h3></div>
       <form onSubmit={publish}>
         <fieldset disabled={pending}>
           <legend>Область применения</legend>
@@ -358,10 +405,10 @@ function AdmissionRuleEditor({ token }: { token: string }) {
             <div className="form-columns" key={key}>
               <label>Тип документа <input name={`type-${key}`} maxLength={100} required /></label>
               <label>Название <input name={`title-${key}`} maxLength={255} required /></label>
-              <button type="button" onClick={() => setDocuments((current) => current.filter((item) => item !== key))}>Удалить</button>
+              <button className="workflow-secondary" type="button" onClick={() => setDocuments((current) => current.filter((item) => item !== key))}>Удалить</button>
             </div>
           ))}
-          <div className="actions"><button type="button" onClick={() => {
+          <div className="workflow-actions"><button className="workflow-secondary" type="button" onClick={() => {
             setDocuments((current) => [...current, nextKey]);
             setNextKey((current) => current + 1);
           }}>Добавить документ</button></div>
@@ -372,18 +419,18 @@ function AdmissionRuleEditor({ token }: { token: string }) {
             <div className="form-columns" key={key}>
               <label>Предмет <input name={`subject-${key}`} maxLength={100} required /></label>
               <label>Балл <input type="number" name={`minimum-${key}`} min={0} max={100} required /></label>
-              <button type="button" onClick={() => setSubjects((current) => current.filter((item) => item !== key))}>Удалить</button>
+              <button className="workflow-secondary" type="button" onClick={() => setSubjects((current) => current.filter((item) => item !== key))}>Удалить</button>
             </div>
           ))}
-          <div className="actions"><button type="button" onClick={() => {
+          <div className="workflow-actions"><button className="workflow-secondary" type="button" onClick={() => {
             setSubjects((current) => [...current, nextKey]);
             setNextKey((current) => current + 1);
           }}>Добавить предмет</button></div>
         </fieldset>
-        <div className="actions"><button type="submit" disabled={pending}>Опубликовать редакцию</button></div>
+        <div className="workflow-actions"><button type="submit" disabled={pending}>Опубликовать редакцию</button></div>
       </form>
       {error && <p className="error" role="alert">{error}</p>}
-      {message && <p role="status">{message}</p>}
+      {message && <WorkflowNotice variant="success"><p>{message}</p></WorkflowNotice>}
     </section>
   );
 }

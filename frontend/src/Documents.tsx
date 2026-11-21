@@ -9,6 +9,8 @@ import {
   updateDocumentType,
   uploadDocument
 } from "./api";
+import { Icon } from "./Icon";
+import { WorkflowEmpty, WorkflowHeader, WorkflowNotice, WorkflowStatus } from "./WorkflowUI";
 
 const documentStatus: Record<string, string> = {
   uploaded: "Загружен",
@@ -30,14 +32,67 @@ export function requestErrorMessage(error: unknown, fallback: string) {
 }
 
 export function CompletenessResult({ result }: { result: DocumentCompleteness }) {
+  const groups = [
+    { title: "Не хватает", files: result.missing_documents },
+    { title: "Ожидают проверки", files: result.pending_documents ?? [] }
+  ];
+
   return (
-    <div className="notice">
+    <WorkflowNotice variant={result.status === "complete" ? "success" : "info"}>
       <p>{result.message}</p>
-      {result.missing_documents.length > 0 && (
-        <p>Не хватает: {result.missing_documents.map(({ title }) => title).join(", ")}.</p>
-      )}
-      {Boolean(result.pending_documents?.length) && (
-        <p>Ожидают проверки: {result.pending_documents?.map(({ title }) => title).join(", ")}.</p>
+      {groups.map(({ title, files }) => files.length > 0 && (
+        <div key={title}>
+          <strong>{title}</strong>
+          <ul>{files.map(({ document_type, title: documentTitle }) => (
+            <li key={document_type}>{documentTitle}</li>
+          ))}</ul>
+        </div>
+      ))}
+    </WorkflowNotice>
+  );
+}
+
+function fileSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} Б`;
+  const [value, unit] = bytes < 1024 * 1024
+    ? [bytes / 1024, "КБ"]
+    : [bytes / (1024 * 1024), "МБ"];
+  return `${new Intl.NumberFormat("ru", { maximumFractionDigits: 1 }).format(value)} ${unit}`;
+}
+
+function DocumentAnalysis({ content }: { content: string }) {
+  let result: Record<string, unknown>;
+
+  try {
+    result = JSON.parse(content);
+  } catch {
+    return <pre>{content}</pre>;
+  }
+  if (!result || typeof result.is_readable !== "boolean") return <pre>{content}</pre>;
+  const type = typeof result.document_type === "string" ? result.document_type : "";
+  const fields = result.extracted_fields && typeof result.extracted_fields === "object"
+    ? Object.entries(result.extracted_fields)
+    : [];
+  const issues = Array.isArray(result.issues)
+    ? result.issues.filter((issue): issue is string => typeof issue === "string")
+    : [];
+  return (
+    <div className="workflow-analysis">
+      <dl>
+        <div><dt>Тип по результатам анализа</dt><dd>{type || "Не определён"}</dd></div>
+        <div><dt>Читаемость</dt><dd>{result.is_readable ? "Текст читается" : "Текст не удалось прочитать"}</dd></div>
+        {fields.map(([key, value]) => (
+          <div key={key}>
+            <dt>{key}</dt>
+            <dd>{typeof value === "string" ? value : value == null ? "—" : JSON.stringify(value)}</dd>
+          </div>
+        ))}
+      </dl>
+      {issues.length > 0 && (
+        <div>
+          <strong>Замечания</strong>
+          <ul>{issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul>
+        </div>
       )}
     </div>
   );
@@ -53,6 +108,7 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
   const [completeness, setCompleteness] = useState<DocumentCompleteness | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [showTypes, setShowTypes] = useState<Record<number, boolean>>({});
   const [configuredTypes, setConfiguredTypes] = useState<string[]>([]);
 
@@ -95,6 +151,7 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
       replaceDocument(document);
       setCompleteness(null);
       form.reset();
+      setPickedFile(null);
     });
   };
 
@@ -120,63 +177,110 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
   });
 
   return (
-    <div className="view-stack">
-      <h2>Документы</h2>
-      <form onSubmit={upload}>
-        <label>
-          Тип документа
-          <input name="document_type" list="document-types" placeholder="Например, паспорт" maxLength={100} required disabled={pending} />
-        </label>
-        <datalist id="document-types">
-          {documentTypes.map((value) => <option key={value} value={value} />)}
-        </datalist>
-        <label>
-          Файл
-          <input name="file" type="file" required disabled={pending} />
-        </label>
-        <div className="actions">
-          <button type="submit" disabled={pending}>Загрузить документ</button>
-          <button type="button" disabled={pending} onClick={() => run(async () => {
+    <div className="workflow">
+      <WorkflowHeader title="Документы" description="Загрузите файлы для заявления и проверьте комплект по профилю." />
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="workflow-documents-grid">
+        <section className="workflow-panel workflow-upload-panel" aria-labelledby="upload-heading">
+          <div className="workflow-panel-heading">
+            <h3 id="upload-heading">Новый документ</h3>
+          </div>
+          <form onSubmit={upload}>
+            <label>
+              Тип документа
+              <input name="document_type" list="document-types" placeholder="Например, паспорт" maxLength={100} required disabled={pending} />
+            </label>
+            <datalist id="document-types">
+              {documentTypes.map((value) => <option key={value} value={value} />)}
+            </datalist>
+            <label className="workflow-dropzone">
+              <span className="workflow-mark"><Icon name="upload" /></span>
+              <span className="workflow-dropzone-copy">
+                <strong>{pickedFile ? pickedFile.name : "Выберите файл или перетащите его сюда"}</strong>
+                <small>{pickedFile ? fileSize(pickedFile.size) : "PDF, DOCX, изображения и текстовые файлы"}</small>
+              </span>
+              <input
+                name="file"
+                type="file"
+                aria-label="Файл"
+                required
+                disabled={pending}
+                onChange={(event) => setPickedFile(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            <div className="workflow-actions">
+              <button type="submit" disabled={pending}>Загрузить документ</button>
+              {pending && <small role="status">Выполняется запрос…</small>}
+            </div>
+          </form>
+        </section>
+
+        <aside className="workflow-panel workflow-checklist-panel" aria-labelledby="checklist-heading">
+          <div className="workflow-panel-heading">
+            <span className="workflow-mark"><Icon name="check" /></span>
+            <h3 id="checklist-heading">Проверка комплекта</h3>
+          </div>
+          <p>Сверьте загруженные документы с требованиями к направлению, указанному в профиле.</p>
+          <button className="workflow-secondary" type="button" disabled={pending} onClick={() => run(async () => {
             setCompleteness(await getDocumentCompleteness(token));
           })}>Проверить комплект по профилю</button>
+          {completeness && <CompletenessResult result={completeness} />}
+        </aside>
+      </div>
+
+      <section className="workflow-panel workflow-file-list" aria-labelledby="files-heading">
+        <div className="workflow-panel-heading">
+          <h3 id="files-heading">Мои файлы</h3>
+          {documents.length > 0 && <span className="workflow-count">{documents.length}</span>}
         </div>
-      </form>
-
-      {pending && <p role="status">Запрос выполняется…</p>}
-      {error && <p className="error" role="alert">{error}</p>}
-      {completeness && <CompletenessResult result={completeness} />}
-      {documents.length === 0 && <p>Документы ещё не загружены.</p>}
-
-      {documents.map((document) => {
-        return (
-          <section key={document.id} className="record">
-            <h3>{document.filename}</h3>
-            <p>{document.document_type ?? "Тип не указан"} · {documentStatusLabel(document.status)}</p>
-            {document.review_message && <p>{document.review_message}</p>}
-            {document.analysis_error && <p className="error">{document.analysis_error}</p>}
-            <div className="actions">
-              <button type="button" disabled={pending} onClick={() => {
-                setShowTypes((current) => ({ ...current, [document.id]: !current[document.id] }));
-              }}>{showTypes[document.id] ? "Отменить" : "Изменить тип"}</button>
-              {document.extracted_text && document.status !== "accepted" && document.status !== "rejected" && (
-                <button type="button" disabled={pending} onClick={() => analyze(document)}>Запустить анализ</button>
-              )}
-            </div>
-            {showTypes[document.id] && (
-              <form onSubmit={(event) => updateType(event, document)}>
-                <label>
-                  Тип документа
-                  <input name="document_type" defaultValue={document.document_type ?? ""} list="document-types" maxLength={100} disabled={pending} />
-                </label>
-                <button type="submit" disabled={pending}>Сохранить тип</button>
-              </form>
-            )}
-            {document.analysis_json && (
-              <details><summary>Результат анализа</summary><pre>{document.analysis_json}</pre></details>
-            )}
-          </section>
-        );
-      })}
+        {documents.length === 0 ? (
+          <WorkflowEmpty title="Документы ещё не загружены" description="Добавьте первый файл, чтобы приложить его к заявлению." icon="file" />
+        ) : (
+          <ul className="workflow-list">
+            {documents.map((document) => (
+              <li key={document.id} className="workflow-file">
+                <div className="workflow-file-row">
+                  <div className="workflow-file-name">
+                    <span className="workflow-mark"><Icon name="file" /></span>
+                    <div>
+                      <h4>{document.filename}</h4>
+                      <small>{document.document_type ?? "Тип не указан"} · {fileSize(document.size_bytes)}</small>
+                    </div>
+                  </div>
+                  <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
+                  <div className="workflow-actions">
+                    <button className="workflow-secondary" type="button" disabled={pending} onClick={() => {
+                      setShowTypes((current) => ({ ...current, [document.id]: !current[document.id] }));
+                    }}>{showTypes[document.id] ? "Отменить" : "Изменить тип"}</button>
+                    {document.extracted_text && document.status !== "accepted" && document.status !== "rejected" && (
+                      <button className="workflow-secondary" type="button" disabled={pending} onClick={() => analyze(document)}>
+                        <Icon name="spark" /> Запустить анализ
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {document.review_message && <p className="workflow-muted">{document.review_message}</p>}
+                {document.analysis_error && <p className="error">{document.analysis_error}</p>}
+                {showTypes[document.id] && (
+                  <form className="workflow-inline-form" onSubmit={(event) => updateType(event, document)}>
+                    <label>
+                      Тип документа
+                      <input name="document_type" defaultValue={document.document_type ?? ""} list="document-types" maxLength={100} disabled={pending} />
+                    </label>
+                    <button type="submit" disabled={pending}>Сохранить тип</button>
+                  </form>
+                )}
+                {document.analysis_json && (
+                  <details className="workflow-disclosure">
+                    <summary>Результат анализа</summary>
+                    <DocumentAnalysis content={document.analysis_json} />
+                  </details>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
     </div>
   );
 }

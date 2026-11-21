@@ -21,6 +21,8 @@ import {
   verifyExamScores
 } from "./api";
 import { CompletenessResult, documentStatusLabel, requestErrorMessage } from "./Documents";
+import { Icon } from "./Icon";
+import { WorkflowEmpty, WorkflowHeader, WorkflowNotice, WorkflowStatus } from "./WorkflowUI";
 
 export const applicationStatus: Record<ApplicationStatus, string> = {
   draft: "Черновик",
@@ -31,14 +33,19 @@ export const applicationStatus: Record<ApplicationStatus, string> = {
 };
 
 export function ApplicationHistory({ events }: { events: ApplicationEvent[] }) {
+  if (events.length === 0) return <p className="workflow-muted">Изменений статуса пока нет.</p>;
   return (
-    <ol>
+    <ol className="workflow-timeline">
       {events.map((event) => (
         <li key={event.id}>
-          {applicationStatus[event.status]} · <time dateTime={event.created_at}>
-            {new Date(event.created_at).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" })}
-          </time>
-          {event.note && <p>{event.note}</p>}
+          <span className="workflow-timeline-dot" />
+          <div>
+            <strong>{applicationStatus[event.status]}</strong>
+            <time dateTime={event.created_at}>
+              {new Date(event.created_at).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" })}
+            </time>
+            {event.note && <p>{event.note}</p>}
+          </div>
         </li>
       ))}
     </ol>
@@ -62,19 +69,29 @@ const verificationResult: Record<string, string> = {
 
 export function Requirements({ result }: { result: ApplicationRequirements }) {
   return (
-    <div className="view-stack">
-      <CompletenessResult result={result.documents} />
+    <div className="workflow-requirements">
+      <div>
+        <h4>Комплект документов</h4>
+        <CompletenessResult result={result.documents} />
+      </div>
+      <div>
+        <h4>Предметы и минимальные баллы</h4>
+        <WorkflowNotice variant={result.ege.status === "meets_minimum" ? "success" : "info"}>
+          <p>{requirementResult[result.ege.status] ?? result.ege.status}</p>
+          {result.ege.missing_subjects.length > 0 && <p>Нужны результаты по предметам {result.ege.missing_subjects.join(", ")}.</p>}
+          {result.ege.below_minimum.length > 0 && (
+            <ul>{result.ege.below_minimum.map(({ subject, score, minimum }) => (
+              <li key={subject}>{subject} · {score} баллов при минимуме {minimum}.</li>
+            ))}</ul>
+          )}
+        </WorkflowNotice>
+      </div>
       {result.rules && (
-        <p>
-          Редакция правил №{result.rules.revision}.
-          {result.rules.source_url && <> <a href={result.rules.source_url}>Источник правил</a>.</>}
+        <p className="workflow-muted workflow-rule-reference">
+          Редакция правил №{result.rules.revision}
+          {result.rules.source_url && <> · <a href={result.rules.source_url}>Источник правил</a></>}
         </p>
       )}
-      <p>{requirementResult[result.ege.status] ?? result.ege.status}</p>
-      {result.ege.missing_subjects.length > 0 && <p>Нужны результаты по предметам {result.ege.missing_subjects.join(", ")}.</p>}
-      {result.ege.below_minimum.map(({ subject, score, minimum }) => (
-        <p key={subject}>{subject} · {score} баллов при минимуме {minimum}.</p>
-      ))}
     </div>
   );
 }
@@ -82,15 +99,16 @@ export function Requirements({ result }: { result: ApplicationRequirements }) {
 export function Verification({ verification }: { verification: ExamScores["verification"] }) {
   if (!verification) return null;
   return (
-    <div className="notice">
-      <p><strong>Синтетическая сверка.</strong> {verificationResult[verification.status] ?? verification.status}</p>
+    <WorkflowNotice variant={verification.status === "match" ? "success" : "info"}>
+      <strong>Синтетическая сверка</strong>
+      <p>{verificationResult[verification.status] ?? verification.status}</p>
       {verification.missing_subjects.length > 0 && (
         <p>В тестовом реестре не найдены предметы {verification.missing_subjects.join(", ")}.</p>
       )}
       {verification.mismatched_subjects.length > 0 && (
         <p>Баллы различаются по предметам {verification.mismatched_subjects.join(", ")}.</p>
       )}
-    </div>
+    </WorkflowNotice>
   );
 }
 
@@ -131,28 +149,54 @@ export function ApplicantApplications({ token, documents, profile }: {
   };
 
   return (
-    <div className="view-stack">
-      <h2>Заявления</h2>
-      {pending && <p role="status">Загрузка заявлений…</p>}
+    <div className="workflow">
+      <WorkflowHeader title="Заявления" description="Создавайте заявления, прикладывайте документы и следите за проверкой.">
+        <button type="button" onClick={() => setSelection("new")}><Icon name="plus" /> Новое заявление</button>
+      </WorkflowHeader>
       {error && <p role="alert" className="error">{error}</p>}
-      <div className="actions">
-        <button type="button" onClick={() => setSelection("new")}>Новое заявление</button>
+      {pending && <p role="status" className="workflow-muted">Загрузка заявлений…</p>}
+      <div className={`workflow-application-grid${applications.length ? " workflow-application-grid--split" : ""}`}>
+        {applications.length > 0 && (
+          <aside className="workflow-panel workflow-application-index">
+            <div className="workflow-panel-heading">
+              <span className="workflow-mark"><Icon name="folder" /></span>
+              <h3>Мои заявления</h3>
+              <span className="workflow-count">{applications.length}</span>
+            </div>
+            <label>
+              <span className="workflow-visually-hidden">Ваши заявления</span>
+              <select value={typeof selection === "number" ? selection : ""} onChange={(event) => setSelection(Number(event.target.value))}>
+                <option value="" disabled>Выберите заявление</option>
+                {applications.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    №{item.id} · {item.program} · {applicationStatus[item.status]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {active && (
+              <div className="workflow-index-summary">
+                <strong>{active.program}</strong>
+                <small>{active.campaign_year} · {active.admission_basis}</small>
+                <WorkflowStatus status={active.status}>{applicationStatus[active.status]}</WorkflowStatus>
+              </div>
+            )}
+          </aside>
+        )}
+        <div className="workflow-application-details">
+          {selection === "new" && <ApplicationEditor key="new" token={token} profile={profile} documents={documents} rules={rules} onSaved={onSaved} />}
+          {active && <ApplicationEditor key={active.id} token={token} application={active} profile={profile} documents={documents} rules={rules} onSaved={onSaved} />}
+          {!active && selection !== "new" && !pending && !error && (
+            <section className="workflow-panel">
+              {applications.length ? (
+                <WorkflowEmpty title="Выберите заявление" description="Откройте его, чтобы увидеть документы, баллы и текущий статус." icon="folder" />
+              ) : (
+                <WorkflowEmpty title="У вас пока нет заявлений" description="Создайте заявление, чтобы выбрать направление и приложить документы." icon="folder" />
+              )}
+            </section>
+          )}
+        </div>
       </div>
-      {applications.length > 0 && (
-        <label>
-          Ваши заявления
-          <select value={typeof selection === "number" ? selection : ""} onChange={(event) => setSelection(Number(event.target.value))}>
-            <option value="" disabled>Выберите заявление</option>
-            {applications.map((item) => (
-              <option key={item.id} value={item.id}>
-                №{item.id} · {item.program} · {applicationStatus[item.status]}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-      {selection === "new" && <ApplicationEditor key="new" token={token} profile={profile} documents={documents} rules={rules} onSaved={onSaved} />}
-      {active && <ApplicationEditor key={active.id} token={token} application={active} profile={profile} documents={documents} rules={rules} onSaved={onSaved} />}
     </div>
   );
 }
@@ -242,9 +286,11 @@ function ApplicationEditor({ token, documents, profile, application, rules, onSa
   };
 
   return (
-    <section className="record view-stack">
-      <h3>{application ? `Заявление №${application.id}` : "Новое заявление"}</h3>
-      {application && <p><strong>{applicationStatus[application.status]}</strong></p>}
+    <section className="workflow-panel workflow-editor">
+      <div className="workflow-panel-heading">
+        <h3>{application ? `Заявление №${application.id}` : "Новое заявление"}</h3>
+        {application && <WorkflowStatus status={application.status}>{applicationStatus[application.status]}</WorkflowStatus>}
+      </div>
       {application?.review_note && <p className="notice">{application.review_note}</p>}
       <form onSubmit={save} onChange={() => { setDirty(true); setRequirements(null); setMessage(""); }}>
         <fieldset disabled={!canEdit || pending}>
@@ -283,35 +329,37 @@ function ApplicationEditor({ token, documents, profile, application, rules, onSa
         </fieldset>
         <fieldset disabled={!canEdit || pending}>
           <legend>Документы заявления</legend>
-          {displayDocuments.length === 0 && <p>Загрузите файлы в разделе «Документы».</p>}
+          {displayDocuments.length === 0 && <p className="workflow-muted">Загрузите файлы в разделе «Документы».</p>}
           {displayDocuments.map((document) => (
-            <label className="check-row" key={document.id}>
+            <label className="check-row workflow-check-row" key={document.id}>
               <input type="checkbox" checked={documentIds.includes(document.id)} onChange={(event) => {
                 const checked = event.target.checked;
                 setDocumentIds((current) => checked ? [...current, document.id] : current.filter((id) => id !== document.id));
               }} />
-              <span>
-                {document.filename} · {document.document_type ?? "Тип не указан"} · {documentStatusLabel(document.status)}
+              <span className="workflow-check-text">
+                <strong>{document.filename}</strong>
+                <small>{document.document_type ?? "Тип не указан"}</small>
                 {document.review_message && <small>{document.review_message}</small>}
               </span>
+              <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
             </label>
           ))}
         </fieldset>
-        <div className="actions">
-          {canEdit && <button type="submit" disabled={pending || !dirty}>Сохранить заявление</button>}
+        <div className="workflow-actions workflow-editor-actions">
+          {canEdit && <button className={applicationId !== undefined ? "workflow-secondary" : undefined} type="submit" disabled={pending || !dirty}>Сохранить заявление</button>}
           {applicationId !== undefined && (
             <>
-              <button type="button" disabled={pending || dirty} onClick={inspectRules}>Проверить требования</button>
-              <button type="button" disabled={pending} onClick={showHistory}>История заявления</button>
+              <button className="workflow-secondary" type="button" disabled={pending || dirty} onClick={inspectRules}>Проверить требования</button>
+              <button className="workflow-secondary" type="button" disabled={pending} onClick={showHistory}><Icon name="clock" /> История заявления</button>
               {canEdit && <button type="button" disabled={pending || dirty || scoresDirty} onClick={submit}>Отправить на проверку</button>}
             </>
           )}
         </div>
       </form>
       {error && <p role="alert" className="error">{error}</p>}
-      {message && <p role="status">{message}</p>}
+      {message && <WorkflowNotice variant="success"><p>{message}</p></WorkflowNotice>}
       {requirements && <Requirements result={requirements} />}
-      {history && <ApplicationHistory events={history} />}
+      {history && <section className="workflow-history"><h4>История заявления</h4><ApplicationHistory events={history} /></section>}
       {applicationId !== undefined && (
         <ExamScoreEditor
           token={token}
@@ -412,12 +460,12 @@ function ExamScoreEditor({ token, applicationId, defaultYear, canEdit, onDirty, 
   };
 
   return (
-    <div className="view-stack">
-      <h3>Заявленные результаты ЕГЭ</h3>
+    <div className="workflow-scores">
+      <div className="workflow-panel-heading"><h3>Заявленные результаты ЕГЭ</h3></div>
       {scores.length === 0 && !pending && <p>Баллы ещё не введены.</p>}
       <form onSubmit={save}>
         {scores.map((row) => (
-          <fieldset className="form-columns" key={row.key} disabled={!canEdit || pending}>
+          <fieldset className="form-columns workflow-score-row" key={row.key} disabled={!canEdit || pending}>
             <legend>Результат</legend>
             <label>
               Предмет
@@ -431,7 +479,7 @@ function ExamScoreEditor({ token, applicationId, defaultYear, canEdit, onDirty, 
               Балл
               <input type="number" min={0} max={100} value={row.score} required onChange={(event) => update(row.key, { score: event.target.value === "" ? "" : event.target.valueAsNumber })} />
             </label>
-            {canEdit && <button type="button" onClick={() => change(() => setScores((current) => current.filter(({ key }) => key !== row.key)))}>Удалить строку</button>}
+            {canEdit && <button className="workflow-secondary" type="button" onClick={() => change(() => setScores((current) => current.filter(({ key }) => key !== row.key)))}>Удалить строку</button>}
           </fieldset>
         ))}
         {canEdit && (
@@ -447,25 +495,25 @@ function ExamScoreEditor({ token, applicationId, defaultYear, canEdit, onDirty, 
                 onChange={(event) => change(() => setSyntheticId(event.target.value.toUpperCase()))}
               />
             </label>
-            <p>Укажите этот идентификатор только для синтетической сверки.</p>
+            <p className="workflow-muted">Этот идентификатор используется только для синтетической сверки.</p>
           </>
         )}
-        <div className="actions">
+        <div className="workflow-actions">
           {canEdit && (
             <>
-              <button type="button" disabled={pending} onClick={() => change(() => {
+              <button className="workflow-secondary" type="button" disabled={pending} onClick={() => change(() => {
                 setScores((current) => [...current, { key: keyCounter, subject: "", year: defaultYear, score: "" }]);
                 setKeyCounter((current) => current + 1);
               })}>Добавить предмет</button>
               <button type="submit" disabled={pending || !dirty}>Сохранить баллы</button>
             </>
           )}
-          <button type="button" disabled={pending || dirty || !syntheticId || !scores.length} onClick={verify}>Сверить с тестовым реестром</button>
+          <button className="workflow-secondary" type="button" disabled={pending || dirty || !syntheticId || !scores.length} onClick={verify}>Сверить с тестовым реестром</button>
         </div>
       </form>
       {pending && <p role="status">Загрузка результатов…</p>}
       {error && <p role="alert" className="error">{error}</p>}
-      {message && <p role="status">{message}</p>}
+      {message && <WorkflowNotice variant="success"><p>{message}</p></WorkflowNotice>}
       <Verification verification={verification} />
     </div>
   );
