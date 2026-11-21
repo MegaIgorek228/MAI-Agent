@@ -12,7 +12,7 @@ type EditorialSpreadProps = {
 };
 
 type CabinetLinksProps = {
-  sections: { view: View; description: string }[];
+  sections: View[];
   onNavigate: (view: View) => void;
 };
 
@@ -23,22 +23,16 @@ const destinations = {
   staff: "Рабочее место",
 } as const;
 
-const destinationOrder: (keyof typeof destinations)[] = ["profile", "documents", "applications", "staff"];
+const destinationOrder: (keyof typeof destinations)[] = ["applications", "staff", "documents", "profile"];
 
 export function CabinetLinks({ sections, onNavigate }: CabinetLinksProps) {
-  const orderedSections = destinationOrder.flatMap((view) => {
-    const section = sections.find((entry) => entry.view === view);
-    return section ? [{ ...section, title: destinations[view] }] : [];
-  });
+  const orderedSections = destinationOrder.filter((view) => sections.includes(view));
 
   return (
     <nav className="cabinet-links" aria-label="Быстрые переходы">
-      {orderedSections.map(({ view, title, description }) => (
+      {orderedSections.map((view) => (
         <button className="cabinet-links__destination" key={view} type="button" onClick={() => onNavigate(view)}>
-          <span className="cabinet-links__text">
-            <strong>{title}</strong>
-            <span>{description}</span>
-          </span>
+          <span>{destinations[view]}</span>
           <Icon name="arrow-right" />
         </button>
       ))}

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
-import type { DocumentItem, Profile, User } from "./api";
+import type { Profile, User } from "./api";
 import { CabinetLinks, EditorialSpread } from "./EditorialSpread";
 import { Icon } from "./Icon";
 
@@ -258,32 +258,20 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
 
 type HomePageProps = {
   user: User;
-  documents: DocumentItem[];
   pairingCode: string;
   pairingPending: boolean;
   onPair: () => void;
   onNavigate: (view: View) => void;
 };
 
-export function HomePage({ user, documents, pairingCode, pairingPending, onPair, onNavigate }: HomePageProps) {
+export function HomePage({ user, pairingCode, pairingPending, onPair, onNavigate }: HomePageProps) {
   const [copiedCode, setCopiedCode] = useState("");
   const staff = isStaff(user);
-  const sections: { view: View; description: string }[] = [];
-  if (user.role === "applicant") {
-    sections.push({ view: "applications", description: "Подача заявления и проверка статуса" });
-  }
-  if (staff) {
-    sections.push({ view: "staff", description: "Проверка заявлений и публикация правил" });
-  }
-  if (user.role !== "student") {
-    sections.push({
-      view: "documents",
-      description: documents.length
-        ? `Загружено файлов: ${documents.length}`
-        : "Загрузка файлов и проверка комплектности"
-    });
-  }
-  sections.push({ view: "profile", description: "Контакты и параметры поступления" });
+  const sections: View[] = [];
+  if (user.role === "applicant") sections.push("applications");
+  if (staff) sections.push("staff");
+  if (user.role !== "student") sections.push("documents");
+  sections.push("profile");
 
   return (
     <div className="home-page">

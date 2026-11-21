@@ -1,63 +1,40 @@
 .cabinet-links {
-  --cabinet-line: var(--showcase-line, rgb(235 244 255 / 22%));
   display: grid;
   grid-auto-flow: column;
   grid-auto-columns: minmax(0, 1fr);
-  border-top: 1px solid var(--cabinet-line);
-  background: var(--showcase-deep, #13283d);
-  color: var(--showcase-ice, #edf5ff);
+  padding-inline: clamp(.25rem, 2.3vw, 1.75rem);
+  border-top: 1px solid rgb(40 42 45 / 24%);
+  color: var(--showcase-deep);
 }
 
 .cabinet-links__destination {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  justify-content: stretch;
-  gap: .75rem;
+  gap: clamp(.25rem, 1vw, .72rem);
   min-width: 0;
-  min-height: 4.75rem;
-  padding: .85rem clamp(.85rem, 2.8vw, 2rem);
+  min-height: 3.3rem;
+  padding: .45rem .16rem;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: inherit;
+  font-size: clamp(.75rem, 1.32vw, .88rem);
+  font-weight: 590;
+  line-height: 1.25;
   text-align: left;
 }
 
-.cabinet-links__destination + .cabinet-links__destination {
-  border-inline-start: 1px solid var(--cabinet-line);
-}
-
 .cabinet-links__destination:hover:not(:disabled) {
-  background: rgb(235 244 255 / 9%);
+  background: transparent;
+  color: var(--primary, #005bc7);
 }
 
 .cabinet-links__destination:focus-visible {
-  outline-color: currentColor;
   outline-offset: -4px;
 }
 
-.cabinet-links__text {
-  display: grid;
-  gap: .26rem;
-  min-width: 0;
-}
-
-.cabinet-links__text strong {
-  font-size: .95rem;
-  font-weight: 640;
-  line-height: 1.25;
-}
-
-.cabinet-links__text > span {
-  opacity: .8;
-  font-size: .75rem;
-  font-weight: 450;
-  line-height: 1.4;
-}
-
 .cabinet-links__destination > .ui-icon {
-  opacity: .75;
-  font-size: .95rem;
+  flex: none;
+  opacity: .66;
+  font-size: .78rem;
 }
 
 .editorial-spread {
@@ -158,17 +135,11 @@
 
 @media (max-width: 35rem) {
   .cabinet-links {
-    grid-auto-flow: row;
-    grid-template-columns: minmax(0, 1fr);
+    padding-inline: 0;
   }
 
   .cabinet-links__destination {
-    min-height: 3.6rem;
-  }
-
-  .cabinet-links__destination + .cabinet-links__destination {
-    border-top: 1px solid var(--cabinet-line);
-    border-inline-start: 0;
+    min-height: 2.75rem;
   }
 
   .spread-gallery {

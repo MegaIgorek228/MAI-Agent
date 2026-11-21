@@ -252,7 +252,7 @@ export function App() {
       setChatSessions([]);
       setHistoryLoading(false);
     }}>
-      {view === "home" && <HomePage user={user} documents={documents}
+      {view === "home" && <HomePage user={user}
         pairingCode={telegramPairingCode} pairingPending={telegramPairingLoading}
         onPair={createTelegramPairing} onNavigate={showView} />}
       {view === "profile" && <ProfilePage user={user} profile={profile} pending={profilePending} saved={profileSaved}
