@@ -24,7 +24,6 @@
   --brand-light: #cae1ff;
   --notice: #ebf3fc;
   --frame: 76rem;
-  --publication-frame: 70rem;
   --publication-gutter: clamp(1rem, 3.4vw, 2rem);
   --display-type: "Manrope Variable", "Golos Text Variable", sans-serif;
   --flight-rule: #d2d5d1;
@@ -160,59 +159,81 @@ legend { padding-inline: .35rem; font-weight: 620; }
 }
 
 .auth-page {
-  width: min(100% - 3rem, var(--publication-frame));
-  margin-inline: auto;
+  position: relative;
   min-height: 100svh;
-  padding-block: 1.25rem 1.5rem;
+  background: #e5e6e3;
 }
 .auth-masthead {
+  position: absolute;
+  z-index: 3;
+  inset: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  min-height: 3.65rem;
-  padding-inline: clamp(.85rem, 2.8vw, 2.1rem);
-  border: 1px solid var(--border);
-  border-radius: 1rem 1rem 0 0;
-  background: var(--surface);
+  min-height: clamp(3.65rem, 8vh, 5.3rem);
+  padding-inline: clamp(1rem, 5.6vw, 6rem);
 }
-.auth-shell {
+.auth-stage {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1.48fr) minmax(0, 1fr);
-  border: 1px solid var(--border);
-  border-top: 0;
-  border-radius: 0 0 1rem 1rem;
-  overflow: hidden;
-  background: var(--surface);
+  align-items: center;
+  justify-items: end;
+  min-height: 100svh;
+  padding: clamp(5.1rem, 13vh, 8rem) clamp(1.5rem, 7vw, 7.75rem) clamp(2rem, 7vh, 5.5rem);
+  isolation: isolate;
+  overflow: clip;
 }
-.auth-publication {
-  min-width: 0;
+.auth-stage__visual {
+  position: absolute;
+  inset: 0;
+  --aircraft-composition-x: .08;
+  --aircraft-tools-left: clamp(1.15rem, 5.6vw, 6rem);
+  --aircraft-tools-right: auto;
+  --aircraft-tools-bottom: clamp(1.15rem, 5vh, 3rem);
+}
+.auth-stage__image {
+  position: absolute;
+  inset: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: center;
-  border-right: 1px solid var(--border);
-  background: #e5e6e3;
+  place-items: center;
+  margin: 0;
 }
-.auth-publication__title {
-  padding: clamp(1.3rem, 3.2vw, 2.8rem) var(--publication-gutter) 1rem;
-  color: var(--ink);
-  font-family: var(--display-type);
-  font-size: clamp(2.15rem, 4.8vw, 4.55rem);
-  font-weight: 545;
-  line-height: 1.02;
-  letter-spacing: -.055em;
+.auth-stage__image img {
+  width: min(94vw, 104rem);
+  transform: translateX(-5.5%);
 }
-.auth-visual { min-width: 0; margin: 0; }
-.auth-visual img {
-  display: block;
-  width: 88%;
-  margin: .3rem auto clamp(1rem, 4vw, 3rem);
+.auth-pass {
+  --ticket-stub: 3.7rem;
+  position: relative;
+  z-index: 2;
+  width: min(100%, 25rem);
+  filter: drop-shadow(0 7px 12px rgb(40 45 50 / 7%)) drop-shadow(0 22px 34px rgb(40 45 50 / 14%));
 }
-.auth-side { display: grid; place-items: center; min-width: 0; padding: clamp(1.55rem, 4vw, 4rem); }
-.auth-main { width: min(100%, 23rem); padding-block: 1rem; }
-.auth-heading { display: grid; gap: .54rem; margin-bottom: 1.5rem; }
-.auth-heading h1 { font-size: clamp(1.65rem, 2.85vw, 2.5rem); font-weight: 670; }
-.auth-heading p { color: var(--muted); font-size: .91rem; }
+.auth-pass__paper {
+  border: 1px solid #f3f3f0;
+  border-radius: 1.12rem;
+  background: #fafaf7;
+  mask-image: radial-gradient(circle at 0 calc(100% - var(--ticket-stub)), transparent .59rem, #000 .63rem),
+    radial-gradient(circle at 100% calc(100% - var(--ticket-stub)), transparent .59rem, #000 .63rem);
+  mask-composite: intersect;
+}
+.auth-pass__main {
+  padding: clamp(1.15rem, 3.2vw, 2.25rem);
+}
+.auth-heading { display: grid; gap: .56rem; margin-bottom: 1.5rem; }
+.auth-heading h1 { font-size: clamp(1.65rem, 2.85vw, 2.5rem); font-weight: 680; }
+.auth-pass__label {
+  display: flex;
+  align-items: center;
+  gap: .48rem;
+  color: var(--muted);
+  font-size: .69rem;
+  font-weight: 660;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.auth-pass__label .ui-icon { color: var(--primary); font-size: 1rem; }
 .auth-field { display: grid; gap: .38rem; min-width: 0; }
 .auth-input { position: relative; display: grid; align-items: center; }
 .auth-input > .ui-icon { position: absolute; left: .83rem; color: var(--muted); font-size: 1rem; pointer-events: none; }
@@ -228,7 +249,18 @@ legend { padding-inline: .35rem; font-weight: 620; }
 .auth-reveal:hover:not(:disabled) { color: var(--primary); background: var(--primary-soft); }
 .auth-submit { justify-content: space-between; min-height: 2.92rem; padding-inline: .96rem; }
 .auth-submit .ui-icon { font-size: 1rem; }
-.auth-switch { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; margin-top: 1.28rem; color: var(--muted); font-size: .83rem; }
+.auth-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .45rem;
+  min-height: var(--ticket-stub);
+  padding: .7rem clamp(1.15rem, 3.2vw, 2.25rem);
+  border-top: 1px dashed #bfcbc8;
+  color: var(--muted);
+  font-size: .8rem;
+}
+.auth-switch .button-link { font-size: inherit; }
 
 .app-shell { min-height: 100vh; }
 .app-header {
@@ -404,15 +436,23 @@ legend { padding-inline: .35rem; font-weight: 620; }
 }
 
 @media (max-width: 42rem) {
-  .auth-page { width: min(100% - 1.25rem, 32rem); padding-block: .65rem; }
   .auth-masthead { min-height: 3.25rem; gap: .38rem; }
   .auth-masthead .topbar-link { font-size: .67rem; text-align: right; }
-  .auth-shell { grid-template-columns: minmax(0, 1fr); }
-  .auth-publication { border-right: 0; border-bottom: 1px solid var(--border); }
-  .auth-publication__title { padding-block: .92rem .58rem; font-size: clamp(1.7rem, 8.8vw, 2.8rem); }
-  .auth-publication__title br { display: none; }
-  .auth-side { padding: 1.12rem 1rem 1.3rem; }
-  .auth-main { padding-block: 0; }
+  .auth-stage {
+    --auth-visual-height: clamp(11.4rem, 42vw, 16rem);
+    align-items: start;
+    justify-items: center;
+    padding: calc(2.4rem + var(--auth-visual-height)) .85rem 1rem;
+  }
+  .auth-stage__visual {
+    top: 2.65rem;
+    bottom: auto;
+    height: var(--auth-visual-height);
+    --aircraft-composition-x: 0;
+    --aircraft-tools-left: .8rem;
+    --aircraft-tools-bottom: .35rem;
+  }
+  .auth-stage__image img { transform: none; }
   .auth-heading { margin-bottom: 1rem; }
   .auth-form { gap: .75rem; }
   .telegram-panel { grid-template-columns: auto minmax(0, 1fr); }
@@ -420,6 +460,10 @@ legend { padding-inline: .35rem; font-weight: 620; }
   .profile-layout, .profile-fields { grid-template-columns: minmax(0, 1fr); }
   .profile-summary { grid-row: 1; }
   input, select, textarea { font-size: 1rem; }
+}
+
+@media (max-width: 21rem) {
+  .auth-pass__paper { mask-image: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -3,6 +3,7 @@ import type { FormEvent, ReactNode } from "react";
 
 import type { Profile, User } from "./api";
 import { AircraftMap } from "./AircraftMap";
+import { AircraftScene } from "./AircraftScene";
 import { Icon } from "./Icon";
 
 export type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
@@ -67,49 +68,52 @@ export function AuthScreen({
           Сайт приёмной комиссии <Icon name="external" />
         </a>
       </header>
-      <main className="auth-shell">
-        <div className="auth-publication">
-          <p className="auth-publication__title">Кабинет <br />на борту</p>
-          <figure className="auth-visual">
-            <img src="/cabin-cutaway.webp" alt="Самолёт с открытой кабиной и пассажирским салоном" fetchPriority="high" />
-          </figure>
+      <main className="auth-stage">
+        <div className="auth-stage__visual">
+          <AircraftScene focus="overview" fallback={
+            <figure className="auth-stage__image">
+              <img src="/cabin-cutaway.webp" alt="Самолёт с открытой кабиной и пассажирским салоном" fetchPriority="high" />
+            </figure>
+          } />
         </div>
-        <section className="auth-side" aria-labelledby="auth-title">
-          <div className="auth-main">
-            <div className="auth-heading">
-              <h1 id="auth-title">{signingIn ? "Вход в кабинет" : "Регистрация"}</h1>
-              <p>{signingIn ? "Введите email и пароль, чтобы войти." : "Создайте аккаунт для работы с документами и заявлениями."}</p>
-            </div>
-            <form onSubmit={onSubmit} className="auth-form">
-              <label className="auth-field">
-                Email
-                <span className="auth-input">
-                  <Icon name="mail" />
-                  <input name="email" type="email" autoComplete="username" value={email}
-                    placeholder="name@example.com" onChange={(event) => onEmailChange(event.target.value)} required />
-                </span>
-              </label>
-              <div className="auth-field">
-                <label htmlFor="auth-password">Пароль</label>
-                <div className="auth-input">
-                  <Icon name="shield" />
-                  <input id="auth-password" name="password" type={passwordVisible ? "text" : "password"} minLength={8}
-                    autoComplete={signingIn ? "current-password" : "new-password"} value={password}
-                    placeholder={signingIn ? "Введите пароль" : "Не менее 8 символов"}
-                    onChange={(event) => onPasswordChange(event.target.value)} required />
-                  <button type="button" className="auth-reveal button-icon"
-                    aria-label={passwordVisible ? "Скрыть пароль" : "Показать пароль"}
-                    onClick={() => setPasswordVisible((visible) => !visible)}>
-                    <Icon name={passwordVisible ? "eye-off" : "eye"} />
-                  </button>
-                </div>
+        <section className="auth-pass" aria-labelledby="auth-title">
+          <div className="auth-pass__paper">
+            <div className="auth-pass__main">
+              <div className="auth-heading">
+                <p className="auth-pass__label"><Icon name="plane" /> Посадочный талон</p>
+                <h1 id="auth-title">{signingIn ? "Вход в кабинет" : "Регистрация"}</h1>
               </div>
-              {error && <p className="error" role="alert">{error}</p>}
-              <button className="auth-submit" type="submit" disabled={pending}>
-                {pending ? (signingIn ? "Входим…" : "Создаём аккаунт…") : (signingIn ? "Войти" : "Создать аккаунт")}
-                {!pending && <Icon name="arrow-right" />}
-              </button>
-            </form>
+              <form onSubmit={onSubmit} className="auth-form">
+                <label className="auth-field">
+                  Email
+                  <span className="auth-input">
+                    <Icon name="mail" />
+                    <input name="email" type="email" autoComplete="username" value={email}
+                      placeholder="name@example.com" onChange={(event) => onEmailChange(event.target.value)} required />
+                  </span>
+                </label>
+                <div className="auth-field">
+                  <label htmlFor="auth-password">Пароль</label>
+                  <div className="auth-input">
+                    <Icon name="shield" />
+                    <input id="auth-password" name="password" type={passwordVisible ? "text" : "password"} minLength={8}
+                      autoComplete={signingIn ? "current-password" : "new-password"} value={password}
+                      placeholder={signingIn ? "Введите пароль" : "Не менее 8 символов"}
+                      onChange={(event) => onPasswordChange(event.target.value)} required />
+                    <button type="button" className="auth-reveal button-icon"
+                      aria-label={passwordVisible ? "Скрыть пароль" : "Показать пароль"}
+                      onClick={() => setPasswordVisible((visible) => !visible)}>
+                      <Icon name={passwordVisible ? "eye-off" : "eye"} />
+                    </button>
+                  </div>
+                </div>
+                {error && <p className="error" role="alert">{error}</p>}
+                <button className="auth-submit" type="submit" disabled={pending}>
+                  {pending ? (signingIn ? "Входим…" : "Создаём аккаунт…") : (signingIn ? "Войти" : "Создать аккаунт")}
+                  {!pending && <Icon name="arrow-right" />}
+                </button>
+              </form>
+            </div>
             <div className="auth-switch">
               <span>{signingIn ? "Впервые здесь?" : "Уже есть аккаунт?"}</span>
               <button type="button" className="button-link" disabled={pending} onClick={() => {

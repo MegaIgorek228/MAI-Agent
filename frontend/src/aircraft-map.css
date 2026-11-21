@@ -29,6 +29,8 @@
 
 .flight-map__heading p { color: var(--muted); font-size: .89rem; }
 .flight-map[data-view="home"] .flight-map__heading p { max-width: 30ch; }
+.flight-map__rotate-hint { display: none; }
+.flight-map:has([data-aircraft-status="ready"]) .flight-map__rotate-hint { display: inline; }
 
 .flight-map__back {
   min-height: 2.5rem;
@@ -49,6 +51,13 @@
   margin-inline: clamp(.65rem, 3.7cqi, 2.7rem);
   transition: height .48s cubic-bezier(.2,.75,.25,1);
 }
+
+.aircraft-scene, .aircraft-scene__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.aircraft-scene__canvas[aria-hidden="true"] { visibility: hidden; }
 
 .flight-map:not([data-view="home"]) .flight-map__scene {
   height: clamp(6.9rem, 15cqi, 10.4rem);
@@ -164,6 +173,13 @@
   .flight-map[data-view="home"] .flight-map__heading { display: grid; justify-content: start; gap: .45rem; }
   .flight-map[data-view="home"] .flight-map__heading p { max-width: none; font-size: .77rem; }
   .flight-map__scene { height: clamp(10.2rem, 44cqi, 16.5rem); }
+  .flight-map[data-view="home"] .flight-map__scene:has([data-aircraft-status="ready"]) {
+    height: clamp(12rem, 49cqi, 18rem);
+  }
+  .flight-map[data-view="home"] .aircraft-scene__canvas {
+    bottom: 3rem;
+    --aircraft-tools-bottom: -2.48rem;
+  }
   .flight-map__marker { top: 35%; min-width: 2.75rem; padding-inline: .35rem; }
   .flight-map__marker span:not(.ui-icon) { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); }
   .flight-map__marker::after { height: 4cqi; }

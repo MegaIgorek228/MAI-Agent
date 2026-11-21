@@ -1,6 +1,8 @@
 import type { CSSProperties } from "react";
 
 import type { User } from "./api";
+import { AircraftScene } from "./AircraftScene";
+import type { AircraftFocus } from "./AircraftViewer";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
 import type { View } from "./Portal";
@@ -12,12 +14,13 @@ type Location = {
   description: string;
   icon: IconName;
   x: number;
+  focus: Exclude<AircraftFocus, "overview">;
 };
 
 const locations: Location[] = [
-  { view: "documents", label: "Кабина пилотов", description: "Документы и статус поступления", icon: "file", x: 17 },
-  { view: "profile", label: "Моё место", description: "Личные данные", icon: "user", x: 33 },
-  { view: "agent", label: "Салон", description: "Диалог с ассистентом", icon: "chat", x: 62 },
+  { view: "documents", label: "Кабина пилотов", description: "Документы и статус поступления", icon: "file", x: 17, focus: "cockpit" },
+  { view: "profile", label: "Моё место", description: "Личные данные", icon: "user", x: 33, focus: "seat" },
+  { view: "agent", label: "Салон", description: "Диалог с ассистентом", icon: "chat", x: 62, focus: "lounge" },
 ];
 
 type AircraftMapProps = { user: User; view: View; onNavigate: (view: View) => void };
@@ -40,7 +43,7 @@ export function AircraftMap({ user, view, onNavigate }: AircraftMapProps) {
         {overview ? (
           <>
             <h1>На борту</h1>
-            <p>Выберите зону самолёта, чтобы открыть раздел кабинета.</p>
+            <p><span className="flight-map__rotate-hint">Поверните самолёт перетаскиванием. </span>Выберите зону, чтобы открыть раздел.</p>
           </>
         ) : (
           <>
@@ -52,23 +55,28 @@ export function AircraftMap({ user, view, onNavigate }: AircraftMapProps) {
         )}
       </header>
       <div className="flight-map__scene">
-        <div className="flight-map__viewport">
-          <div className="flight-map__model" style={camera}>
-            <img src="/cabin-cutaway.webp" alt="Самолёт в разрезе с кабиной пилотов, креслами пассажиров и салоном" fetchPriority="high" />
+        <AircraftScene focus={selected?.focus ?? "overview"} onSelect={(focus) => {
+          const destination = destinations.find((location) => location.focus === focus);
+          if (destination) onNavigate(destination.view);
+        }} fallback={<>
+          <div className="flight-map__viewport">
+            <div className="flight-map__model" style={camera}>
+              <img src="/cabin-cutaway.webp" alt="Самолёт в разрезе с кабиной пилотов, креслами пассажиров и салоном" />
+            </div>
           </div>
-        </div>
-        {overview && (
-          <div className="flight-map__hotspots" aria-label="Зоны на изображении">
-            {destinations.map((location) => (
-              <button key={location.view} className="flight-map__marker" type="button"
-                style={{ "--marker-x": `${location.x}%` } as CSSProperties}
-                onClick={() => onNavigate(location.view)}>
-                <Icon name={location.icon} />
-                <span>{location.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
+          {overview && (
+            <div className="flight-map__hotspots" aria-label="Зоны на изображении">
+              {destinations.map((location) => (
+                <button key={location.view} className="flight-map__marker" type="button"
+                  style={{ "--marker-x": `${location.x}%` } as CSSProperties}
+                  onClick={() => onNavigate(location.view)}>
+                  <Icon name={location.icon} />
+                  <span>{location.label}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </>} />
       </div>
       <nav className="flight-map__routes" aria-label="Зоны самолёта">
         {destinations.map((location) => (
