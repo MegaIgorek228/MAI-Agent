@@ -80,7 +80,7 @@ def fetch_web_page(url: str) -> str:
     This is the agent's data source for live admission information:
     passing scores, program lists, tuition, deadlines, admission results.
 
-    Ready-to-use pages (admissions site of MGU Bauman / MAI):
+    Ready-to-use pages (admissions site of MAI — Moscow Aviation Institute):
       https://priem.mai.ru/base/score/           - passing scores (table by
             program FZ code and full name, budget/paid, by year)
       https://priem.mai.ru/base/offers/          - educational programs

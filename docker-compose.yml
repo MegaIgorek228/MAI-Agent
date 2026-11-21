@@ -34,7 +34,7 @@ services:
       AI_API_CA_BUNDLE: ${AI_API_CA_BUNDLE:-}
       OPENAI_BASE_URL: ${QWEN_BASE_URL:-https://api-ai.mai.ru/v1}
       OPENAI_API_KEY: ${QWEN_API_KEY:-}
-      HERMES_INFERENCE_MODEL: ${QWEN_MODEL:-qwen3.8-27b}
+      HERMES_INFERENCE_MODEL: ${QWEN_MODEL:-deepseek-v4.1-flash}
       HERMES_PROVIDER: openai
       SSL_CERT_FILE: ${AI_API_CA_BUNDLE:-}
       REQUESTS_CA_BUNDLE: ${AI_API_CA_BUNDLE:-}

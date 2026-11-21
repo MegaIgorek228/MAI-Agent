@@ -1,7 +1,7 @@
 # =============================================================================
 # MAI-Agent container Hermes home (baked into the backend image at
 # /root/.hermes). Same shape as the host isolated profile
-# (%LOCALAPPDATA%\MAI-Agent\acp): ACP + native multimodal (Qwen via MAI API).
+# (%LOCALAPPDATA%\MAI-Agent\acp): ACP + MAI relay (DeepSeek, OpenAI-compatible).
 # No secrets here — the MAI API key comes from the OPENAI_API_KEY env var
 # (compose injects it; providers.mai.key_env points at it).
 # =============================================================================
@@ -11,14 +11,14 @@
 # custom:mai resolves to an OpenAI-compatible chat_completions client pointed
 # at the MAI relay (verified: resolve_runtime_provider('custom:mai')).
 model:
-  default: "qwen3.8-27b"
+  default: "deepseek-v4.1-flash"
   provider: "custom:mai"
 
 agent:
   # Native multimodality: user images (ACP ImageContentBlock -> image_url data
   # URL) go straight into the main model's messages. No vision tool detour.
   image_input_mode: native
-  reasoning_effort: "medium"   # supported by MAI API (xhigh, medium, low)
+  reasoning_effort: "low"      # deepseek-v4.1-flash: low/high/xhigh/max (NO "medium")
 
 # Named custom provider: the MAI relay. Auxiliary slots route through it
 # (provider: custom:mai) so their wire shape comes from the custom-provider
@@ -30,7 +30,7 @@ providers:
     base_url: "https://api-ai.mai.ru/v1"
     key_env: OPENAI_API_KEY
 
-# Auxiliary tasks stay on the main (MAI/Qwen) provider — never Nous.
+# Auxiliary tasks stay on the main (MAI relay) provider — never Nous.
 auxiliary:
   vision:
     provider: custom:mai

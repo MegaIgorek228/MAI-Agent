@@ -24,7 +24,7 @@ python scripts/e2e_compose.py                           # 9/9 сценариев
 
 - **Backend (FastAPI)**: учётные записи и роли (applicant/staff/student), JWT, чат-сессии, документы, требования к документам, knowledge base (pgvector + embeddings bge-m3, dim 1024), discovery/синхронизация официальных источников (mai.ru, priem.mai.ru), MCP HTTP-сервер для Hermes.
 - **Hermes через ACP** (основной протокол Backend ↔ Hermes): ACP client на SDK `agent-client-protocol==0.9.0` (в версиях 0.10+ отсутствует `ModelInfo`), изолированный профиль Hermes в `backend/hermes-profile/` (без секретов, ключ резолвится из env `OPENAI_API_KEY`), MCP-сервер Backend передаётся через `HttpMcpServer`, доверенный контекст — в заголовке `X-MAI-Context`.
-- **LLM**: Qwen3.8-27b через `https://api-ai.mai.ru/v1` (MAI relay). Vision (анализ изображений) — нативный, работает.
+- **LLM**: `deepseek-v4.1-flash` через `https://api-ai.mai.ru/v1` (MAI relay, OpenAI-совместимый; модель выбирается в `backend/hermes-profile/config.yaml` → `model.default`). Vision (анализ изображений) — нативный.
 - **Frontend (React/Vite + nginx)**: все 8 location-блоков, загрузка изображений, история чата с картинками, сборка в Docker-образе.
 - **Telegram**: polling **только в Backend** (бот `mai_priem_bot`), pairing chat по одноразовому коду, `/start` создаёт технический аккаунт; polling в Hermes Gateway отключён.
 - **Данные**: PostgreSQL + pgvector, миграции Alembic до `0005_chat_message_image` (FK `chat_messages.image_document_id → documents.id, ondelete SET NULL` — история чата с картинками).

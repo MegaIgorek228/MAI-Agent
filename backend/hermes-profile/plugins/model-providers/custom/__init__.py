@@ -10,9 +10,12 @@ approvals) ship disabled reasoning by design, so on the MAI relay
     Unexpected reasoning effort none. Supported types are xhigh (default),
     medium, and low.
 
-The MAI relay only accepts xhigh / medium / low. For MAI endpoints this
-override projects the disabled state as ``medium`` (a supported level). Every
-other endpoint keeps the bundled wire shape verbatim.
+The MAI relay models each accept different reasoning_effort vocabularies:
+qwen3.8-27b takes xhigh / medium / low; deepseek-v4.1-flash takes
+low / high / xhigh / max / int[1..100] (verified live: "medium" 400s on
+DeepSeek V4.1). "none" is rejected by both, so for MAI endpoints this
+override projects the disabled state as ``low`` — valid on every relay
+model. Every other endpoint keeps the bundled wire shape verbatim.
 
 Scope: this plugin lives in the container Hermes home
 (/root/.hermes/plugins/model-providers/custom/) and shadows the bundled plugin
@@ -234,14 +237,16 @@ class CustomProfile(ProviderProfile):
 
         # Reasoning / thinking control for custom OpenAI-compatible endpoints.
         # Same wire shapes as the bundled 0.19.0 profile, except: on the MAI
-        # relay the disabled state is projected as reasoning_effort="medium"
-        # (the relay 400s on "none"; it accepts xhigh/medium/low).
+        # relay the disabled state is projected as reasoning_effort="low"
+        # ("none" 400s; "low" is accepted by every relay model — qwen3.8-27b
+        # and deepseek-v4.1-flash, whose vocabularies do not overlap on
+        # "medium").
         if reasoning_config and isinstance(reasoning_config, dict):
             _effort = (reasoning_config.get("effort") or "").strip().lower()
             _enabled = reasoning_config.get("enabled", True)
             if _effort == "none" or _enabled is False:
                 if base_url_host_matches(str(ctx.get("base_url") or ""), MAI_HOST):
-                    top_level["reasoning_effort"] = "medium"
+                    top_level["reasoning_effort"] = "low"
                 else:
                     top_level["reasoning_effort"] = "none"
                     if _looks_like_ollama_endpoint(ctx.get("base_url")):
