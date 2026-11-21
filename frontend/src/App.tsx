@@ -3,6 +3,7 @@ import { ChangeEvent, FormEvent, useEffect, useState } from "react";
 import {
   DocumentItem,
   ChatMessage,
+  ChatSession,
   createTelegramPairingCode,
   createChatSession,
   documentFileUrl,
@@ -10,7 +11,7 @@ import {
   getCurrentUser,
   getDocuments,
   getProfile,
-  getStaffApplicants,
+  listChatSessions,
   login,
   Profile,
   register,
@@ -19,10 +20,23 @@ import {
   sendChatMessage,
   User
 } from "./api";
+import { ApplicantApplications } from "./Admissions";
+import { StaffApplications } from "./StaffApplications";
+import { Documents, requestErrorMessage } from "./Documents";
 import "./styles.css";
 
 type AuthMode = "login" | "register";
-type View = "home" | "profile" | "documents" | "staff" | "agent";
+type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
+
+const sessionLabel = (session: ChatSession) => {
+  const channel = session.channel === "telegram" ? "Telegram" : "Web";
+  const date = new Date(session.created_at);
+  const stamp = Number.isNaN(date.getTime()) ? "" : date.toLocaleString("ru-RU", {
+    dateStyle: "short",
+    timeStyle: "short"
+  });
+  return [`${channel} · Диалог №${session.id}`, stamp].filter(Boolean).join(" · ");
+};
 
 export function App() {
   const [mode, setMode] = useState<AuthMode>("login");
@@ -34,10 +48,10 @@ export function App() {
   const [view, setView] = useState<View>("home");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [staffApplicants, setStaffApplicants] = useState<Array<{ id: number; email: string; is_active: boolean }>>(
-    []
-  );
   const [chatSessionId, setChatSessionId] = useState<number | null>(null);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -46,6 +60,33 @@ export function App() {
   const [chatImageDocumentId, setChatImageDocumentId] = useState<number | null>(null);
   const [chatImageFile, setChatImageFile] = useState<File | null>(null);
   const [chatImagePreview, setChatImagePreview] = useState<string | null>(null);
+  const [profilePending, setProfilePending] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  useEffect(() => {
+    if (!chatImagePreview) return;
+    return () => URL.revokeObjectURL(chatImagePreview);
+  }, [chatImagePreview]);
+
+  useEffect(() => {
+    if (!token || view !== "agent") return;
+    let ignore = false;
+    setHistoryLoading(true);
+    listChatSessions(token).then((sessions) => {
+      if (!ignore) setChatSessions(sessions);
+    }).catch((requestError) => {
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось открыть историю диалогов"));
+    }).finally(() => {
+      if (!ignore) setHistoryLoading(false);
+    });
+    return () => { ignore = true; };
+  }, [token, view, historyRefresh]);
+
+  const replaceDocument = (replacement: DocumentItem) => {
+    setDocuments((current) => current.some((item) => item.id === replacement.id)
+      ? current.map((item) => item.id === replacement.id ? replacement : item)
+      : [replacement, ...current]);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -58,8 +99,8 @@ export function App() {
       const currentUser = await getCurrentUser(response.access_token);
       setToken(response.access_token);
       setUser(currentUser);
+      setProfile(await getProfile(response.access_token));
       if (currentUser.role !== "student") {
-        setProfile(await getProfile(response.access_token));
         setDocuments(await getDocuments(response.access_token));
       }
     } catch (requestError) {
@@ -71,27 +112,53 @@ export function App() {
     const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const form = new FormData(event.currentTarget);
-      const updated = await updateProfile(token, {
-        first_name: String(form.get("first_name") || ""),
-        last_name: String(form.get("last_name") || ""),
-        phone: String(form.get("phone") || ""),
-        target_program: String(form.get("target_program") || ""),
-        admission_basis: String(form.get("admission_basis") || "")
-      });
-      setProfile(updated);
+      setError("");
+      setProfileSaved(false);
+      setProfilePending(true);
+      try {
+        const updated = await updateProfile(token, {
+          first_name: String(form.get("first_name") || ""),
+          last_name: String(form.get("last_name") || ""),
+          phone: String(form.get("phone") || ""),
+          target_program: String(form.get("target_program") || ""),
+          admission_basis: String(form.get("admission_basis") || "")
+        });
+        setProfile(updated);
+        setProfileSaved(true);
+      } catch (requestError) {
+        setError(requestErrorMessage(requestError, "Не удалось сохранить профиль"));
+      } finally {
+        setProfilePending(false);
+      }
     };
 
-    const upload = async (event: ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      if (!file) return;
-      const uploaded = await uploadDocument(token, file, "unspecified");
-      setDocuments((current) => [uploaded, ...current]);
-      event.target.value = "";
+    const showView = (next: View) => {
+      setError("");
+      setView(next);
     };
 
-    const loadStaffApplicants = async () => {
-      setStaffApplicants(await getStaffApplicants(token));
-      setView("staff");
+    const clearComposer = () => {
+      setChatInput("");
+      setChatImageDocumentId(null);
+      setChatImageFile(null);
+      setChatImagePreview(null);
+    };
+
+    const openChat = async (event: ChangeEvent<HTMLSelectElement>) => {
+      const id = Number(event.target.value);
+      if (!id || id === chatSessionId) return;
+      setError("");
+      setChatLoading(true);
+      try {
+        const messages = await getChatMessages(token, id);
+        setChatSessionId(id);
+        setChatMessages(messages);
+        clearComposer();
+      } catch (requestError) {
+        setError(requestErrorMessage(requestError, "Не удалось восстановить диалог"));
+      } finally {
+        setChatLoading(false);
+      }
     };
 
     const startChat = async () => {
@@ -101,6 +168,12 @@ export function App() {
         const session = await createChatSession(token);
         setChatSessionId(session.id);
         setChatMessages([]);
+        setChatSessions((current) => [
+          { id: session.id, channel: session.channel, created_at: new Date().toISOString() },
+          ...current.filter(({ id }) => id !== session.id)
+        ]);
+        setHistoryRefresh((value) => value + 1);
+        clearComposer();
       } catch (requestError) {
         setError(requestError instanceof Error ? requestError.message : "Ошибка запуска агента");
       } finally {
@@ -123,11 +196,12 @@ export function App() {
 
     const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
-      if (!chatSessionId || !chatInput.trim()) return;
-      const content = chatInput.trim();
+      if (!chatSessionId || (!chatInput.trim() && !chatImageDocumentId)) return;
+      const content = chatInput.trim() || "Проанализируй прикреплённое изображение.";
       const attachedId = chatImageDocumentId;
       const attachedFile = chatImageFile;
-      setChatInput("");
+      setError("");
+      const previousMessages = chatMessages;
       setChatMessages((current) => [
         ...current,
         {
@@ -141,11 +215,10 @@ export function App() {
       try {
         const response = await sendChatMessage(token, chatSessionId, content, attachedId ?? undefined);
         setChatMessages((current) => [...current, response]);
-        setChatImageDocumentId(null);
-        setChatImageFile(null);
-        setChatImagePreview(null);
+        clearComposer();
       } catch (requestError) {
         setError(requestError instanceof Error ? requestError.message : "Ошибка запроса к агенту");
+        setChatMessages(await getChatMessages(token, chatSessionId).catch(() => previousMessages));
       } finally {
         setChatLoading(false);
       }
@@ -158,6 +231,7 @@ export function App() {
       setChatLoading(true);
       try {
         const uploaded = await uploadDocument(token, file, "image");
+        replaceDocument(uploaded);
         setChatImageDocumentId(uploaded.id);
         setChatImageFile(file);
         setChatImagePreview(URL.createObjectURL(file));
@@ -171,17 +245,23 @@ export function App() {
 
     return (
       <main className="container">
-        <section className="card">
+        <section className="card workspace-card">
           <nav className="nav">
-            <button type="button" onClick={() => setView("home")}>Главная</button>
-            <button type="button" onClick={() => setView("profile")}>Профиль</button>
-            <button type="button" onClick={() => setView("documents")}>Документы</button>
-            <button type="button" onClick={() => setView("agent")}>Агент</button>
-            {user.role !== "applicant" && (
-              <button type="button" onClick={loadStaffApplicants}>Сотрудники</button>
+            <button type="button" aria-pressed={view === "home"} onClick={() => showView("home")}>Главная</button>
+            <button type="button" aria-pressed={view === "profile"} onClick={() => showView("profile")}>Профиль</button>
+            {user.role !== "student" && (
+              <button type="button" aria-pressed={view === "documents"} onClick={() => showView("documents")}>Документы</button>
+            )}
+            {user.role === "applicant" && (
+              <button type="button" aria-pressed={view === "applications"} onClick={() => showView("applications")}>Заявления</button>
+            )}
+            <button type="button" aria-pressed={view === "agent"} onClick={() => showView("agent")}>Агент</button>
+            {(user.role === "admissions_staff" || user.role === "administrator") && (
+              <button type="button" aria-pressed={view === "staff"} onClick={() => showView("staff")}>Сотрудники</button>
             )}
           </nav>
           <h1>MAI-Agent</h1>
+          {error && <p className="error" role="alert">{error}</p>}
           {view === "home" && (
             <>
               <p>Добро пожаловать, {user.email}.</p>
@@ -199,7 +279,7 @@ export function App() {
             </>
           )}
           {view === "profile" && profile && (
-            <form onSubmit={saveProfile}>
+            <form onSubmit={saveProfile} onChange={() => setProfileSaved(false)}>
               {[
                 ["first_name", "Имя"],
                 ["last_name", "Фамилия"],
@@ -212,35 +292,36 @@ export function App() {
                   <input name={name} defaultValue={profile[name as keyof Profile] as string | null ?? ""} />
                 </label>
               ))}
-              <button type="submit">Сохранить профиль</button>
+              <button type="submit" disabled={profilePending}>Сохранить профиль</button>
+              {profileSaved && <p role="status">Профиль сохранён.</p>}
             </form>
           )}
           {view === "documents" && (
-            <>
-              <label className="upload">
-                Загрузить документ
-                <input type="file" onChange={upload} />
-              </label>
-              <ul>
-                {documents.map((document) => (
-                  <li key={document.id}>
-                    {document.filename} — {document.status}
-                    {document.review_message && <small>{document.review_message}</small>}
-                  </li>
-                ))}
-              </ul>
-            </>
+            <Documents token={token} documents={documents} replaceDocument={replaceDocument} />
+          )}
+          {view === "applications" && user.role === "applicant" && (
+            <ApplicantApplications key={token} token={token} documents={documents} profile={profile} />
           )}
           {view === "agent" && (
-            <>
-              {!chatSessionId ? (
-                <>
-                  <p>Диалог использует Hermes Agent через ACP stdio.</p>
-                  <button type="button" onClick={startChat} disabled={chatLoading}>
-                    {chatLoading ? "Запуск..." : "Начать диалог"}
-                  </button>
-                </>
-              ) : (
+            <div className="view-stack">
+              <div className="actions">
+                <button type="button" onClick={startChat} disabled={chatLoading}>Начать диалог</button>
+                <button type="button" disabled={chatLoading || historyLoading} onClick={() => {
+                  setError("");
+                  setHistoryRefresh((value) => value + 1);
+                }}>Обновить список диалогов</button>
+              </div>
+              {chatSessions.length > 0 && (
+                <label>
+                  История диалогов
+                  <select value={chatSessionId ?? ""} onChange={openChat} disabled={chatLoading}>
+                    <option value="" disabled>Выберите диалог</option>
+                    {chatSessions.map((session) => <option key={session.id} value={session.id}>{sessionLabel(session)}</option>)}
+                  </select>
+                </label>
+              )}
+              {(chatLoading || historyLoading) && <p role="status">Запрос выполняется…</p>}
+              {chatSessionId && (
                 <>
                   <div className="chat">
                     {chatMessages.map((message, index) => (
@@ -252,7 +333,7 @@ export function App() {
                             alt={message.image_filename ?? "Прикреплённое изображение"}
                           />
                         ) : null}
-                        <p><strong>{message.role}:</strong> {message.content}</p>
+                        <p><strong>{message.role === "user" ? "Вы" : "Агент"}</strong> {message.content}</p>
                       </div>
                     ))}
                   </div>
@@ -267,38 +348,39 @@ export function App() {
                       />
                     </label>
                     {chatImagePreview && (
-                      <p className="chat-attachment-preview">
+                      <div className="chat-attachment-preview">
                         <img
                           className="chat-image"
                           src={chatImagePreview}
                           alt="Предпросмотр прикреплённого изображения"
                         />
-                        <span>Изображение прикреплено.</span>
-                      </p>
+                        <button type="button" disabled={chatLoading} onClick={() => {
+                          setChatImageDocumentId(null);
+                          setChatImageFile(null);
+                          setChatImagePreview(null);
+                        }}>Открепить изображение</button>
+                      </div>
                     )}
                     <label>
                       Сообщение
-                      <textarea value={chatInput} onChange={(event) => setChatInput(event.target.value)} />
+                      <textarea value={chatInput} disabled={chatLoading} onChange={(event) => setChatInput(event.target.value)} />
                     </label>
                     <button type="submit" disabled={chatLoading}>Отправить</button>
                   </form>
                 </>
               )}
-            </>
+            </div>
           )}
-          {view === "staff" && (
-            <>
-              <h2>Абитуриенты</h2>
-              <ul>
-                {staffApplicants.map((applicant) => <li key={applicant.id}>{applicant.email}</li>)}
-              </ul>
-            </>
+          {view === "staff" && (user.role === "admissions_staff" || user.role === "administrator") && (
+            <StaffApplications key={token} token={token} />
           )}
           <button
             type="button"
             onClick={() => {
               setToken(null);
               setUser(null);
+              setChatSessions([]);
+              setHistoryLoading(false);
             }}
           >Выйти</button>
         </section>

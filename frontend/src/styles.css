@@ -27,6 +27,74 @@ body {
   box-shadow: 0 0.5rem 2rem rgb(0 0 0 / 10%);
 }
 
+.workspace-card {
+  width: min(100%, 48rem);
+  padding: clamp(1rem, 4vw, 2rem);
+}
+
+.view-stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.workspace-card > button:last-child {
+  margin-top: 1.5rem;
+}
+
+.view-stack :where(h2, h3, h4, p, ul),
+.record :where(h2, h3, h4, p, ul) {
+  margin: 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.record {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  overflow-wrap: anywhere;
+}
+
+.form-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.65rem;
+  align-items: end;
+}
+
+fieldset {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.4rem;
+}
+
+.check-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.application-list {
+  list-style: none;
+  padding: 0;
+}
+
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .nav {
   display: flex;
   flex-wrap: wrap;
@@ -58,6 +126,10 @@ small {
   border-radius: 0.4rem;
 }
 
+.notice p + p {
+  margin-top: 0.5rem;
+}
+
 form {
   display: grid;
   gap: 1rem;
@@ -69,14 +141,23 @@ label {
 }
 
 input,
+select,
+textarea,
 button {
   font: inherit;
   padding: 0.65rem 0.8rem;
   border-radius: 0.4rem;
 }
 
-input {
+input,
+select,
+textarea {
+  width: 100%;
   border: 1px solid #d1d5db;
+}
+
+input[type="checkbox"] {
+  width: auto;
 }
 
 button {
@@ -84,6 +165,15 @@ button {
   color: white;
   background: #2563eb;
   cursor: pointer;
+}
+
+button[aria-pressed="true"] {
+  background: #1e40af;
+}
+
+button:disabled {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .link {
@@ -111,8 +201,13 @@ button {
   gap: 0.25rem;
 }
 
+.chat-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .chat-image {
-  max-width: 14rem;
+  max-width: min(100%, 14rem);
   max-height: 14rem;
   border-radius: 0.5rem;
   border: 1px solid #e5e7eb;
@@ -121,6 +216,7 @@ button {
 
 .chat-attachment-preview {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   margin: 0.25rem 0;

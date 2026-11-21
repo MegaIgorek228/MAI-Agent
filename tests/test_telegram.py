@@ -270,3 +270,52 @@ def test_polling_loop_owned_by_backend_only(monkeypatch):
         assert service._task is None, "stop() must cancel the polling loop"
 
     asyncio.run(scenario_with_token())
+
+
+def test_polling_retries_failed_update_before_confirming_later_ones(monkeypatch):
+    service = tg_module.TelegramService()
+    attempts = []
+
+    async def handle(token, update):
+        attempts.append(update["update_id"])
+        if len(attempts) == 1:
+            raise RuntimeError("Temporary handler error")
+
+    monkeypatch.setattr(service, "_handle_update", handle)
+    updates = [{"update_id": 15}, {"update_id": 16}]
+    assert asyncio.run(service._process_updates("token", "123", updates, 0, 0)) == (15, 1)
+    assert tg_module.read_checkpoint("123") == (15, 1)
+    assert attempts == [15]
+
+    offset, failed_attempts = tg_module.read_checkpoint("123")
+    assert asyncio.run(service._process_updates("token", "123", updates, offset, failed_attempts)) == (17, 0)
+    assert tg_module.read_checkpoint("123") == (17, 0)
+    assert attempts == [15, 15, 16]
+
+
+def test_document_is_stored_for_linked_applicant(client, monkeypatch):
+    auth_token = _link_user_and_chat(client, "tg-document@example.com", "4100")
+    fake = _FakeBotAPI(file_content=b"synthetic text")
+    fake.file_path = "documents/example.txt"
+    _install_fake_bot(monkeypatch, fake)
+    update = {
+        "update_id": 20,
+        "message": {
+            "chat": {"id": 4100},
+            "document": {"file_id": "F2", "file_name": "example.txt", "file_size": 14},
+        },
+    }
+    asyncio.run(tg_module.telegram_service._handle_update("token", update))
+    assert any("сохранён" in reply for reply in fake.sent_messages())
+    documents = client.get("/applicant/documents", headers={"Authorization": f"Bearer {auth_token}"}).json()
+    assert [document["filename"] for document in documents] == ["example.txt"]
+
+
+def test_telegram_long_response_is_sent_in_full(monkeypatch):
+    fake = _FakeBotAPI()
+    _install_fake_bot(monkeypatch, fake)
+    original = "тест текста " * 850
+    asyncio.run(tg_module.telegram_service._send("token", "4100", original))
+    assert len(fake.sent_messages()) > 1
+    assert all(len(message) <= 4000 for message in fake.sent_messages())
+    assert "".join(fake.sent_messages()) == original

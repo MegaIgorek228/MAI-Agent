@@ -26,7 +26,9 @@ def upgrade() -> None:
             "embedding",
             type_=Vector(1024),
             existing_type=Vector(1536),
-            postgresql_using="embedding::vector(1024)",
+            # These embeddings were generated for the old model. Keep text
+            # searchable while the current model re-embeds it.
+            postgresql_using="NULL::vector(1024)",
         )
     op.create_table(
         "admission_requirements",
@@ -61,5 +63,13 @@ def downgrade() -> None:
     op.drop_index("ix_admission_requirements_target_program", table_name="admission_requirements")
     op.drop_index("ix_admission_requirements_document_type", table_name="admission_requirements")
     op.drop_table("admission_requirements")
+    if op.get_bind().dialect.name == "postgresql":
+        op.alter_column(
+            "knowledge_chunks",
+            "embedding",
+            type_=Vector(1536),
+            existing_type=Vector(1024),
+            postgresql_using="NULL::vector(1536)",
+        )
     op.drop_column("documents", "analysis_error")
     op.drop_column("documents", "analysis_json")

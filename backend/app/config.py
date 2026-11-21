@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -18,14 +18,22 @@ class Settings(BaseSettings):
     hermes_cwd: str = "."
     acp_startup_timeout_seconds: int = 60
     acp_prompt_timeout_seconds: int = 600
+    hermes_max_processes: int = Field(default=8, ge=1)
+    hermes_idle_timeout_seconds: int = Field(default=900, ge=1)
     mcp_public_url: str = "http://localhost:8000/mcp"
-    qwen_base_url: str | None = None
-    qwen_api_key: str | None = None
-    qwen_model: str | None = None
+    llm_base_url: str | None = Field(
+        default=None, validation_alias=AliasChoices("LLM_BASE_URL", "QWEN_BASE_URL")
+    )
+    llm_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("LLM_API_KEY", "QWEN_API_KEY")
+    )
+    document_model: str | None = Field(
+        default=None, validation_alias=AliasChoices("DOCUMENT_MODEL", "QWEN_MODEL")
+    )
     ai_api_ca_bundle: str | None = None
     embedding_base_url: str | None = None
     embedding_api_key: str | None = None
-    embedding_model: str = "Qwen/Qwen3-Embedding-0.6B"
+    embedding_model: str = "bge-m3"
     max_upload_size_bytes: int = 10 * 1024 * 1024
     max_image_size_bytes: int = 10 * 1024 * 1024
     embedding_dimensions: int = 1024

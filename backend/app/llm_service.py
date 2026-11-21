@@ -8,14 +8,14 @@ from app.config import get_settings
 
 
 class LLMProviderUnavailable(RuntimeError):
-    """Raised when no OpenAI-compatible Qwen endpoint is configured."""
+    """Raised when no OpenAI-compatible model endpoint is configured."""
 
 
 def analyze_document(text: str) -> dict[str, Any]:
     settings = get_settings()
-    if not settings.qwen_base_url or not settings.qwen_api_key or not settings.qwen_model:
+    if not settings.llm_base_url or not settings.llm_api_key or not settings.document_model:
         raise LLMProviderUnavailable(
-            "Configure QWEN_BASE_URL, QWEN_API_KEY and QWEN_MODEL for document analysis"
+            "Configure LLM_BASE_URL, LLM_API_KEY and DOCUMENT_MODEL for document analysis"
         )
     http_client = httpx.Client(verify=settings.ai_api_ca_bundle or True, timeout=90)
     # MAI relay (2026-11-21): the auth layer rejects any request carrying an
@@ -23,32 +23,35 @@ def analyze_document(text: str) -> dict[str, Any]:
     # `x-api-key`. openai SDK: api_key="" suppresses the Bearer header
     # (auth_headers property returns {} for an empty key), default_headers
     # carries the real key as x-api-key. Verified live against the relay.
-    client = OpenAI(
-        base_url=settings.qwen_base_url,
+    with OpenAI(
+        base_url=settings.llm_base_url,
         api_key="",
-        default_headers={"x-api-key": settings.qwen_api_key},
+        default_headers={"x-api-key": settings.llm_api_key},
         http_client=http_client,
-    )
-    response = client.chat.completions.create(
-        model=settings.qwen_model,
-        temperature=0,
-        response_format={"type": "json_object"},
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You analyze applicant documents. Return only JSON with keys "
-                    "document_type, is_readable, extracted_fields, issues. "
-                    "Do not invent values; use null or an empty list when unknown."
-                ),
-            },
-            {"role": "user", "content": text},
-        ],
-    )
-    content = response.choices[0].message.content
+    ) as client:
+        response = client.chat.completions.create(
+            model=settings.document_model,
+            temperature=0,
+            response_format={"type": "json_object"},
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Клиент передаёт текст, который уже извлечён из загруженного документа. "
+                        "Проанализируй именно переданный текст. Верни один JSON-объект с полями "
+                        "document_type (строка или null), is_readable (логическое), "
+                        "extracted_fields (объект) и issues (массив строк). "
+                        "Извлекай только явно указанные сведения. Читаемость оценивай "
+                        "по разборчивости имеющегося текста, даже если в нём мало полей."
+                    ),
+                },
+                {"role": "user", "content": f"Извлечённый текст документа:\n\n{text}"},
+            ],
+        )
+    content = response.choices[0].message.content if response.choices else None
     if not content:
-        raise LLMProviderUnavailable("Qwen returned an empty document analysis")
+        raise LLMProviderUnavailable("Model returned an empty document analysis")
     parsed = json.loads(content)
     if not isinstance(parsed, dict):
-        raise LLMProviderUnavailable("Qwen returned a non-object document analysis")
+        raise LLMProviderUnavailable("Model returned a non-object document analysis")
     return parsed

@@ -1,16 +1,23 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials
 from jwt import InvalidTokenError
-from sqlalchemy import select
+from openai import APIError
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
 from app.dependencies import bearer_scheme, get_current_user, require_roles
-from app.document_service import SUPPORTED_IMAGE_TYPES, content_hash, extract_text, validate_image
+from app.document_service import (
+    SUPPORTED_IMAGE_TYPES, create_document, document_checklist,
+)
 from app.llm_service import LLMProviderUnavailable, analyze_document
-from app.models import AdmissionRequirement, ApplicantProfile, Document, User, UserRole
-from app.schemas import DocumentResponse, ProfileResponse, ProfileUpdate
+from app.models import (
+    AdmissionRequirement, ApplicantProfile, Application, ApplicationDocument, Document, User, UserRole,
+)
+from app.schemas import (
+    DocumentAnalysis, DocumentResponse, DocumentTypeUpdate, ProfileResponse, ProfileUpdate,
+)
 from app.security import decode_access_token
 
 router = APIRouter(prefix="/applicant", tags=["applicant"])
@@ -73,39 +80,26 @@ def update_profile(
 @router.post("/documents", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
 def upload_document(
     file: UploadFile = File(...),
-    document_type: str | None = None,
+    document_type: str | None = Form(default=None, max_length=100),
     current_user: User = Depends(
         require_roles(UserRole.applicant, UserRole.admissions_staff, UserRole.administrator)
     ),
     db: Session = Depends(get_db),
+    legacy_document_type: str | None = Query(default=None, alias="document_type", max_length=100),
 ) -> Document:
     max_size = get_settings().max_upload_size_bytes
     content = file.file.read(max_size + 1)
     if len(content) > max_size:
         raise HTTPException(status_code=413, detail="File is too large")
-    if (file.content_type or "").startswith("image/"):
-        try:
-            validate_image(
-                file.content_type or "",
-                content,
-                get_settings().max_image_size_bytes,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    extracted = extract_text(file.filename or "document", file.content_type or "", content)
-    document = Document(
-        owner_id=current_user.id,
-        filename=file.filename or "document",
-        content_type=file.content_type or "application/octet-stream",
-        size_bytes=len(content),
-        sha256=content_hash(content),
-        content=content,
-        document_type=document_type,
-        status="extracted" if extracted is not None else "needs_manual_review",
-        extracted_text=extracted,
-        review_message=None if extracted is not None else "Формат файла не поддерживается для извлечения текста.",
-    )
-    db.add(document)
+    submitted_document_type = document_type if document_type is not None else legacy_document_type
+    try:
+        document = create_document(
+            db, owner_id=current_user.id, filename=file.filename or "document",
+            content_type=file.content_type or "application/octet-stream", content=content,
+            document_type=submitted_document_type,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     db.commit()
     db.refresh(document)
     return document
@@ -162,6 +156,43 @@ def download_document_file(
     )
 
 
+@router.patch("/documents/{document_id}/type", response_model=DocumentResponse)
+def update_document_type(
+    document_id: int,
+    payload: DocumentTypeUpdate,
+    current_user: User = Depends(
+        require_roles(UserRole.applicant, UserRole.admissions_staff, UserRole.administrator)
+    ),
+    db: Session = Depends(get_db),
+) -> Document:
+    application_rows = list(db.execute(
+        select(Application)
+        .join(ApplicationDocument, Application.id == ApplicationDocument.application_id)
+        .where(ApplicationDocument.document_id == document_id, Application.applicant_id == current_user.id)
+        .order_by(Application.id)
+        .with_for_update()
+    ).scalars())
+    document = db.scalar(
+        select(Document).where(Document.id == document_id, Document.owner_id == current_user.id)
+        .with_for_update()
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    new_type = (payload.document_type or "").strip() or None
+    if new_type != document.document_type:
+        if any(item.status not in {"draft", "needs_changes"} for item in application_rows):
+            raise HTTPException(status_code=409, detail="Document is attached to a submitted application")
+        document.document_type = new_type
+        db.execute(
+            update(ApplicationDocument)
+            .where(ApplicationDocument.document_id == document.id)
+            .values(review_status=None, review_note=None)
+        )
+        db.commit()
+        db.refresh(document)
+    return document
+
+
 @router.get("/documents/completeness")
 def document_completeness(
     current_user: User = Depends(
@@ -169,36 +200,41 @@ def document_completeness(
     ),
     db: Session = Depends(get_db),
 ) -> dict[str, object]:
-    documents = list(db.scalars(select(Document).where(Document.owner_id == current_user.id)))
+    approved = (
+        select(ApplicationDocument.application_id)
+        .where(
+            ApplicationDocument.document_id == Document.id,
+            ApplicationDocument.review_status == "accepted",
+        )
+        .exists()
+    )
+    documents = [
+        (kind, "accepted" if is_accepted else None)
+        for kind, is_accepted in db.execute(
+            select(Document.document_type, approved).where(Document.owner_id == current_user.id)
+        )
+    ]
     profile = db.scalar(select(ApplicantProfile).where(ApplicantProfile.user_id == current_user.id))
     requirements = list(
         db.scalars(select(AdmissionRequirement).where(AdmissionRequirement.required.is_(True)))
     )
-    if not requirements:
-        return {
-            "status": "needs_admission_requirements",
-            "documents_received": len(documents),
-            "missing_documents": [],
-            "message": "Требования к комплекту документов ещё не загружены для данной ситуации поступления.",
+    program = profile.target_program if profile else None
+    basis = profile.admission_basis if profile else None
+    applicable: dict[str, dict[str, str]] = {}
+    needs_profile = False
+    for requirement in requirements:
+        if (
+            (program and requirement.target_program not in {None, program})
+            or (basis and requirement.admission_basis not in {None, basis})
+        ):
+            continue
+        if (requirement.target_program and not program) or (requirement.admission_basis and not basis):
+            needs_profile = True
+            continue
+        applicable[requirement.document_type] = {
+            "document_type": requirement.document_type, "title": requirement.title,
         }
-    applicable = [
-        requirement
-        for requirement in requirements
-        if (requirement.target_program is None or requirement.target_program == profile.target_program)
-        and (requirement.admission_basis is None or requirement.admission_basis == profile.admission_basis)
-    ]
-    document_types = {document.document_type for document in documents if document.document_type}
-    missing = [
-        {"document_type": item.document_type, "title": item.title}
-        for item in applicable
-        if item.document_type not in document_types
-    ]
-    return {
-        "status": "incomplete" if missing else "complete",
-        "documents_received": len(documents),
-        "missing_documents": missing,
-        "message": "Комплект документов проверен по загруженным требованиям.",
-    }
+    return document_checklist(list(applicable.values()), documents, needs_profile=needs_profile)
 
 
 @router.post("/documents/{document_id}/analyze")
@@ -217,18 +253,18 @@ def analyze_uploaded_document(
     if not document.extracted_text:
         raise HTTPException(status_code=422, detail="Document has no extracted text")
     try:
-        result = analyze_document(document.extracted_text)
-    except (LLMProviderUnavailable, ValueError) as exc:
-        document.analysis_error = str(exc)
+        result = DocumentAnalysis.model_validate(analyze_document(document.extracted_text))
+    except (LLMProviderUnavailable, APIError, ValueError) as exc:
+        message = "Не удалось получить структурированный результат анализа документа."
+        document.analysis_error = message
         db.commit()
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    import json
+        raise HTTPException(status_code=503, detail=message) from exc
 
-    document.analysis_json = json.dumps(result, ensure_ascii=False)
+    document.analysis_json = result.model_dump_json()
     document.analysis_error = None
     document.status = "analyzed"
     db.commit()
-    return {"document_id": document.id, "analysis": result}
+    return {"document_id": document.id, "analysis": result.model_dump(mode="json")}
 
 
 @router.get("/staff/applicants")

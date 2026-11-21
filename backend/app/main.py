@@ -1,11 +1,18 @@
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
-from fastapi import FastAPI
+from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
+from fastapi import FastAPI, HTTPException
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.config import get_settings
+from app.db import engine
+from app.hermes_client import hermes_manager
 from app.mcp_tools import mcp
-from app.routers import applicants, auth, chat, knowledge, users
+from app.routers import admissions, applicants, auth, chat, knowledge, users
 from app.telegram_service import telegram_service
 
 # uvicorn's default logging config covers only "uvicorn*" loggers; without an
@@ -27,8 +34,15 @@ async def lifespan(app: FastAPI):
         return
     async with mcp_app.lifespan(app):
         await telegram_service.start()
-        yield
-        await telegram_service.stop()
+        reaper = asyncio.create_task(hermes_manager.reap_idle(), name="mai-agent-hermes-reaper")
+        try:
+            yield
+        finally:
+            await telegram_service.stop()
+            reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await reaper
+            await hermes_manager.close_all()
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -36,6 +50,7 @@ app = FastAPI(title=settings.app_name, lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(applicants.router)
+app.include_router(admissions.router)
 app.include_router(knowledge.router)
 app.include_router(chat.router)
 
@@ -43,6 +58,20 @@ app.include_router(chat.router)
 @app.get("/health", tags=["system"])
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready", tags=["system"])
+def readiness() -> dict[str, str]:
+    migrations = ScriptDirectory(str(Path(__file__).resolve().parents[1] / "alembic"))
+    expected = set(migrations.get_heads())
+    try:
+        with engine.connect() as connection:
+            current = set(MigrationContext.configure(connection).get_current_heads())
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=503, detail="Database is unavailable") from exc
+    if current != expected:
+        raise HTTPException(status_code=503, detail="Database migrations are pending")
+    return {"status": "ready"}
 
 
 try:

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, JsonValue, StrictBool
 
 from app.models import UserRole
 
@@ -67,6 +67,17 @@ class DocumentResponse(BaseModel):
     analysis_json: str | None
     analysis_error: str | None
     created_at: datetime
+
+
+class DocumentTypeUpdate(BaseModel):
+    document_type: str | None = Field(max_length=100)
+
+
+class DocumentAnalysis(BaseModel):
+    document_type: str | None
+    is_readable: StrictBool
+    extracted_fields: dict[str, JsonValue]
+    issues: list[str]
 
 
 class TelegramPairingCodeResponse(BaseModel):

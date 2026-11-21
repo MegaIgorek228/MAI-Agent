@@ -17,22 +17,20 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "chat_messages",
-        sa.Column("image_document_id", sa.Integer(), nullable=True),
-    )
-    op.create_index("ix_chat_messages_image_document_id", "chat_messages", ["image_document_id"])
-    op.create_foreign_key(
-        "fk_chat_messages_image_document_id",
-        "chat_messages",
-        "documents",
-        ["image_document_id"],
-        ["id"],
-        ondelete="SET NULL",
-    )
+    with op.batch_alter_table("chat_messages") as messages:
+        messages.add_column(sa.Column("image_document_id", sa.Integer(), nullable=True))
+        messages.create_index("ix_chat_messages_image_document_id", ["image_document_id"])
+        messages.create_foreign_key(
+            "fk_chat_messages_image_document_id",
+            "documents",
+            ["image_document_id"],
+            ["id"],
+            ondelete="SET NULL",
+        )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_chat_messages_image_document_id", "chat_messages", type_="foreignkey")
-    op.drop_index("ix_chat_messages_image_document_id", table_name="chat_messages")
-    op.drop_column("chat_messages", "image_document_id")
+    with op.batch_alter_table("chat_messages") as messages:
+        messages.drop_constraint("fk_chat_messages_image_document_id", type_="foreignkey")
+        messages.drop_index("ix_chat_messages_image_document_id")
+        messages.drop_column("image_document_id")

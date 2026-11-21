@@ -9,9 +9,9 @@ description = "FastAPI backend for MAI-Agent"
 requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.14,<2",
-    "agent-client-protocol>=0.12.1,<1",
+    "agent-client-protocol==0.9.0",
     "fastapi>=0.115,<1",
-    "fastmcp>=2,<3",
+    "fastmcp==2.14.7",
     "email-validator>=2.2,<3",
     # ddgs is the keyless DuckDuckGo search backend for hermes-agent's web
     # tools. hermes gates BOTH web_search and web_extract on check_web_api_key(),
@@ -30,14 +30,16 @@ dependencies = [
     # (also pulled transitively by python-docx, but declared explicitly).
     "lxml>=5,<7",
     "python-docx>=1.1,<2",
+    "python-multipart>=0.0.18,<1",
     "Pillow>=11,<13",
-    "openai>=1.60,<2",
+    "openai>=2.24,<3",
     "httpx>=0.28,<1",
     "sqlalchemy>=2.0,<3",
     "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
+hermes = ["hermes-agent[acp]==0.19.0"]
 test = [
     "httpx>=0.28,<1",
     "pytest>=8.3,<9",

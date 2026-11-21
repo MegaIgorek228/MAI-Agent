@@ -1,18 +1,18 @@
-"""Compose E2E: all app scenarios against the Docker Compose stack
-(backend:8000 + postgres + real hermes-acp in the backend container).
+"""Smoke test the Compose Web entry point, Backend, PostgreSQL and live Hermes.
+
+Use only an isolated test stack. The runner creates synthetic users and sources.
 """
-import base64
 import io
 import json
 import os
 import subprocess
-import sys
 import time
 
 import httpx
 from PIL import Image
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.getenv("MAI_E2E_BASE_URL", "http://127.0.0.1:5173")
+BACKEND_CONTAINER = os.getenv("MAI_E2E_BACKEND_CONTAINER", "mai-agent-backend-1")
 TS = int(time.time())
 RESULTS = {}
 
@@ -28,12 +28,12 @@ def section(name):
 def wait_backend():
     for _ in range(240):
         try:
-            if httpx.get(f"{BASE}/health", timeout=2).status_code == 200:
+            if httpx.get(f"{BASE}/ready", timeout=2).status_code == 200:
                 return
         except Exception:
             pass
         time.sleep(2)
-    raise SystemExit("backend not healthy after 480s")
+    raise SystemExit("Web entry point not ready after 480s")
 
 
 def create_admin_user():
@@ -50,7 +50,7 @@ def create_admin_user():
         "db.add(u); db.commit(); db.refresh(u); print(u.id); db.close()\n"
     )
     out = subprocess.run(
-        ["docker", "exec", "mai-agent-backend-1", "python", "-c", code],
+        ["docker", "exec", BACKEND_CONTAINER, "python", "-c", code],
         capture_output=True, text=True,
     )
     if out.returncode != 0:
@@ -125,16 +125,30 @@ def main():
     assert r.status_code == 201, r.text
     image_doc_id = r.json()["id"]
     r = c.post(f"{BASE}/applicant/documents", headers=H_A,
-               files={"file": ("note.txt", b"test text document", "text/plain")},
-               data={"document_type": "unspecified"})
-    assert r.status_code == 201, r.text
+               files={"file": ("note.txt", b"z" * (2 * 1024 * 1024), "text/plain")},
+               data={"document_type": "education"})
+    assert r.status_code == 201 and r.json()["document_type"] == "education", r.text[:300]
+    document_id = r.json()["id"]
     r = c.get(f"{BASE}/applicant/documents", headers=H_A)
     assert r.status_code == 200 and len(r.json()) == 2
     log(f"uploaded image (id={image_doc_id}) + text doc; list OK")
     RESULTS["4_documents"] = "PASS"
 
+    text_doc = c.post(
+        f"{BASE}/applicant/documents", headers=H_A,
+        files={"file": ("synthetic-note.txt", (
+            "СПРАВКА № 42\nВыдана 22.11.2026\n"
+            "Подтверждает участие в испытательном учебном проекте «Авиация»."
+        ).encode(), "text/plain")},
+        data={"document_type": "other"},
+    )
+    assert text_doc.status_code == 201, text_doc.text[:300]
+    note_id = text_doc.json()["id"]
+    analysis = c.post(f"{BASE}/applicant/documents/{note_id}/analyze", headers=H_A)
+    assert analysis.status_code == 200 and analysis.json()["analysis"]["is_readable"] is True, analysis.text[:300]
+
     # 5. Text chat through the REAL in-container hermes-acp -> Qwen via MAI
-    section("5. TEXT CHAT (real ACP + Qwen)")
+    section("5. TEXT CHAT (real ACP + MAI model)")
     t0 = time.time()
     r = c.post(f"{BASE}/chat/sessions", headers=H_A, json={"channel": "web"})
     assert r.status_code == 201, f"session start failed: {r.status_code} {r.text[:300]}"
@@ -143,16 +157,16 @@ def main():
     log(f"session created in {time.time()-t0:.1f}s (hermes={hermes_sid})")
     t0 = time.time()
     r = c.post(f"{BASE}/chat/sessions/{session_id}/messages", headers=H_A,
-               json={"content": "Ответь одним словом: ОК"})
+               json={"content": "Расшифруй МАИ по-русски."})
     dt = time.time() - t0
     assert r.status_code == 200, f"text chat failed: {r.status_code} {r.text[:300]}"
     answer = r.json()["content"]
     log(f"text answer in {dt:.1f}s: {answer[:120]!r}")
-    assert "ОК" in answer.upper() or "ок" in answer.lower()
+    assert "авиацион" in answer.lower(), answer
     RESULTS["5_text_chat"] = "PASS"
 
-    # 6. Image analysis through ACP + Qwen
-    section("6. IMAGE ANALYSIS (real ACP + Qwen)")
+    # 6. Image analysis through ACP and the configured MAI model
+    section("6. IMAGE ANALYSIS (real ACP + MAI model)")
     t0 = time.time()
     r = c.post(f"{BASE}/chat/sessions/{session_id}/messages", headers=H_A,
                json={"content": "Опиши, что на изображении: какие фигуры, их цвета и где они расположены.",
@@ -175,28 +189,31 @@ def main():
     assert len(user_img_msg) == 1 and user_img_msg[0]["image_document_id"] == image_doc_id
     assert user_img_msg[0]["image_filename"] == "e2e_scene.png"
     log(f"history: {len(msgs)} messages, user image message linked to doc {image_doc_id}")
-    r = c.get(f"{BASE}/applicant/documents/{image_doc_id}/file?access_token={applicant}")
+    r = c.get(f"{BASE}/applicant/documents/{image_doc_id}/file", headers=H_A)
     assert r.status_code == 200 and r.content == png and r.headers["content-type"].startswith("image/png")
-    log("file endpoint via access_token query: bytes identical, content-type ok")
+    log("file endpoint: bytes identical, content-type ok")
     RESULTS["7_history"] = "PASS"
 
     # 8. Knowledge base search (pgvector + MAI embeddings)
     section("8. KNOWLEDGE SEARCH")
-    source_text = (
-        "Правила приёма 2026: абитуриенты поступают на основании результатов ЕГЭ. "
-        "Для направления Баллистика минимальный проходной балл по профильной математике — 70. "
-        "Документы подаются в приёмную комиссию до 20 июля."
-    )
+    source_url = f"https://example.com/mai-smoke-{TS}"
+    source_text = f"Синтетическая запись для сквозной проверки. Маркер: Аэротест{TS}."
     r = c.post(f"{BASE}/knowledge/sources", headers=H_S, json={
-        "url": "https://priem.mai.ru/rules-2026", "title": "Правила приёма 2026", "text": source_text,
+        "url": source_url, "title": "Синтетическая запись MAI Agent", "text": source_text,
     })
     assert r.status_code == 200, f"knowledge source failed: {r.status_code} {r.text[:300]}"
     log(f"knowledge source created: {r.json()}")
-    r = c.post(f"{BASE}/knowledge/search", headers=H_S, json={"query": "Какой минимальный балл по математике?", "limit": 3})
+    r = c.post(f"{BASE}/knowledge/search", headers=H_S, json={"query": f"Аэротест{TS}", "limit": 3})
     assert r.status_code == 200, f"search failed: {r.status_code} {r.text[:300]}"
     chunks = r.json()
     log(f"search returned {len(chunks)} chunk(s): {str(chunks[:1])[:200]}")
-    RESULTS["8_knowledge"] = "PASS" if chunks else "FAIL"
+    RESULTS["8_knowledge"] = "PASS" if any(row.get("source_url") == source_url for row in chunks) else "FAIL"
+    r = c.post(f"{BASE}/chat/sessions/{session_id}/messages", headers=H_A, json={
+        "content": f"Вызови инструмент search_admissions_knowledge по маркеру Аэротест{TS}. "
+                   "Укажи URL найденного источника, если инструмент его вернул.",
+    })
+    assert r.status_code == 200, r.text[:300]
+    RESULTS["8b_mcp"] = "PASS" if source_url in r.json()["content"] else "FAIL"
 
     # 9. Staff workspace
     section("9. STAFF WORKSPACE")
@@ -207,14 +224,26 @@ def main():
     log(f"staff sees {len(applicants_list)} applicant(s), incl. the E2E one")
     RESULTS["9_staff"] = "PASS"
 
-    # Telegram: check backend logs for polling start + absence of errors
-    section("TELEGRAM (polling design)")
-    out = subprocess.run(["docker", "logs", "mai-agent-backend-1"], capture_output=True, text=True).stdout
-    tg_lines = [l for l in out.splitlines() if "elegram" in l or "olling" in l]
-    log("telegram/polling-related backend log lines:")
-    for l in tg_lines[-8:]:
-        log("  " + l[:200])
-    RESULTS["telegram_logs"] = "\n".join(tg_lines[-8:]) or "(no telegram log lines)"
+    section("10. APPLICATION REVIEW")
+    scope = {"campaign_year": 2026, "program": f"SMOKE-{TS}", "admission_basis": "ЕГЭ"}
+    r = c.post(f"{BASE}/applicant/staff/admission-rules", headers=H_S, json={
+        **scope, "document_requirements": [{"document_type": "education", "title": "Учебный файл"}],
+    })
+    assert r.status_code == 201, r.text[:300]
+    r = c.post(f"{BASE}/applicant/applications", headers=H_A, json={**scope, "document_ids": [document_id]})
+    assert r.status_code == 201, r.text[:300]
+    application_id = r.json()["id"]
+    application = f"{BASE}/applicant/applications/{application_id}"
+    staff_application = f"{BASE}/applicant/staff/applications/{application_id}"
+    r = c.post(f"{application}/submit", headers=H_A)
+    assert r.status_code == 200 and r.json()["status"] == "submitted"
+    assert c.patch(f"{staff_application}/status", headers=H_S, json={"status": "under_review"}).status_code == 200
+    doc_review = c.patch(f"{staff_application}/documents/{document_id}", headers=H_S, json={"status": "accepted"})
+    assert doc_review.status_code == 200, doc_review.text[:300]
+    r = c.patch(f"{staff_application}/status", headers=H_S, json={"status": "reviewed"})
+    assert r.status_code == 200, r.text[:300]
+    assert c.get(application, headers=H_A).json()["status"] == "reviewed"
+    RESULTS["10_application"] = "PASS"
 
     with open(os.path.join(os.path.dirname(__file__), "e2e_compose_result.json"), "w", encoding="utf-8") as f:
         json.dump(RESULTS, f, ensure_ascii=False, indent=2)
@@ -223,8 +252,8 @@ def main():
     log(f"OVERALL: {len(passed)} PASS, {len(failed)} FAIL {failed if failed else ''}")
     for k, v in RESULTS.items():
         log(f"  {k}: {v if isinstance(v, str) and len(str(v)) < 80 else str(v)[:80]}")
-    log("E2E DONE")
+    return int(bool(failed))
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

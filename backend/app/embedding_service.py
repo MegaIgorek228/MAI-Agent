@@ -1,5 +1,7 @@
-from openai import OpenAI
+import math
+
 import httpx
+from openai import OpenAI, OpenAIError
 
 from app.config import get_settings
 
@@ -27,14 +29,25 @@ def _client() -> OpenAI:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
+    if not texts:
+        return []
     settings = get_settings()
-    response = _client().embeddings.create(
-        model=settings.embedding_model,
-        input=texts,
-    )
-    vectors = [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
-    if any(len(vector) != settings.embedding_dimensions for vector in vectors):
-        raise EmbeddingProviderUnavailable("Embedding provider returned an unexpected vector dimension")
+    try:
+        with _client() as client:
+            response = client.embeddings.create(model=settings.embedding_model, input=texts)
+    except OpenAIError as exc:
+        raise EmbeddingProviderUnavailable("Embedding provider could not process the request") from exc
+    entries = sorted(response.data, key=lambda item: item.index)
+    if [item.index for item in entries] != list(range(len(texts))):
+        raise EmbeddingProviderUnavailable("Embedding provider did not return one vector per input")
+    vectors = [item.embedding for item in entries]
+    if any(
+        len(vector) != settings.embedding_dimensions
+        or not all(map(math.isfinite, vector))
+        or not any(vector)
+        for vector in vectors
+    ):
+        raise EmbeddingProviderUnavailable("Embedding provider returned an invalid vector")
     return vectors
 
 

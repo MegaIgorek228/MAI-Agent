@@ -2,7 +2,19 @@ from datetime import datetime
 from enum import StrEnum
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, LargeBinary, String, Text, func
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -89,6 +101,7 @@ class KnowledgeChunk(Base):
     ordinal: Mapped[int] = mapped_column(Integer)
     content: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
+    embedding_model: Mapped[str | None] = mapped_column(String(255))
 
 
 class AdmissionRequirement(Base):
@@ -101,6 +114,102 @@ class AdmissionRequirement(Base):
     title: Mapped[str] = mapped_column(String(255))
     required: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     source_url: Mapped[str | None] = mapped_column(String(2048))
+
+
+class AdmissionRuleSet(Base):
+    __tablename__ = "admission_rule_sets"
+    __table_args__ = (UniqueConstraint("campaign_year", "program", "admission_basis", "revision"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_year: Mapped[int] = mapped_column(Integer)
+    program: Mapped[str] = mapped_column(String(255))
+    admission_basis: Mapped[str] = mapped_column(String(100))
+    revision: Mapped[int] = mapped_column(Integer)
+    source_url: Mapped[str | None] = mapped_column(String(2048))
+    document_requirements: Mapped[list[dict[str, str]]] = mapped_column(JSON)
+    subject_minima: Mapped[dict[str, int]] = mapped_column(JSON)
+
+
+class Application(Base):
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    campaign_year: Mapped[int] = mapped_column(Integer)
+    program: Mapped[str] = mapped_column(String(255))
+    admission_basis: Mapped[str] = mapped_column(String(100))
+    rules_id: Mapped[int | None] = mapped_column(ForeignKey("admission_rule_sets.id"))
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    review_note: Mapped[str | None] = mapped_column(Text)
+    synthetic_candidate_id: Mapped[str | None] = mapped_column(String(48))
+    scores_revision: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(),
+    )
+
+
+class ApplicationDocument(Base):
+    __tablename__ = "application_documents"
+
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True,
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True, index=True,
+    )
+    review_status: Mapped[str | None] = mapped_column(String(20))
+    review_note: Mapped[str | None] = mapped_column(Text)
+
+
+class ApplicationEvent(Base):
+    __tablename__ = "application_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), index=True,
+    )
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    status: Mapped[str] = mapped_column(String(32))
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EgeScore(Base):
+    __tablename__ = "ege_scores"
+    __table_args__ = (CheckConstraint("score BETWEEN 0 AND 100"),)
+
+    application_id: Mapped[int] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), primary_key=True,
+    )
+    subject: Mapped[str] = mapped_column(String(100), primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    score: Mapped[int] = mapped_column(Integer)
+
+
+class SyntheticEgeResult(Base):
+    __tablename__ = "synthetic_ege_results"
+    __table_args__ = (CheckConstraint("score BETWEEN 0 AND 100"),)
+
+    candidate_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(100), primary_key=True)
+    year: Mapped[int] = mapped_column(Integer, primary_key=True)
+    score: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(20), default="valid")
+
+
+class EgeVerification(Base):
+    __tablename__ = "ege_verifications"
+    __table_args__ = (UniqueConstraint("application_id", "scores_revision", "reference_digest"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id", ondelete="CASCADE"))
+    scores_revision: Mapped[int] = mapped_column(Integer)
+    reference_digest: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(20))
+    missing_subjects: Mapped[list[str]] = mapped_column(JSON)
+    mismatched_subjects: Mapped[list[str]] = mapped_column(JSON)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ChatSession(Base):

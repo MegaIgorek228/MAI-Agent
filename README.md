@@ -1,6 +1,6 @@
 # MAI-Agent
 
-ИИ-агент для Московского авиационного института (МАИ). Проект предназначен для помощи абитуриентам и сотрудникам приёмной комиссии: ответы по правилам приёма, работа с документами и профилями, проверка комплектности документов и получение официальных результатов экзаменов.
+ИИ-агент для Московского авиационного института (МАИ). Проект предназначен для помощи абитуриентам и сотрудникам приёмной комиссии: ответы по правилам приёма, работа с профилями, заявлениями и документами, проверка комплектности и сверка результатов ЕГЭ с синтетическим реестром.
 
 ## Архитектура
 
@@ -10,15 +10,15 @@
 - **MCP-сервер** — FastMCP-инструменты МАИ, вызываемые Hermes.
 - **Хранилище** — PostgreSQL для бизнес-данных и pgvector для векторного поиска.
 - **Web** — React + TypeScript.
-- **Каналы доступа** — Web и Telegram; совместимость Telegram с выбранными компонентами требует проверки.
+- **Каналы доступа** — Web и Telegram. Polling выполняет Backend.
 
-Hermes не обращается к PostgreSQL напрямую. Доступ к данным предоставляется через backend API или MCP-инструменты. SQLite используется только для внутреннего состояния Hermes.
+Hermes не обращается к PostgreSQL напрямую. Доступ к данным предоставляется через backend API или MCP-инструменты. Hermes хранит собственные сессии в SQLite. Backend использует PostgreSQL с pgvector в Compose и поддерживает SQLite для локальных тестов.
 
 ## Технологии
 
 Python, FastAPI, Hermes Agent, ACP, MCP/FastMCP, PostgreSQL, pgvector, React, TypeScript и Docker Compose.
 
-Конкретные версии, зависимости и способы запуска будут определены после проверки официальной документации и закрытия технических вопросов.
+Compose использует Hermes 0.19, ACP SDK 0.9 и FastMCP 2.14.7. Модель для чата и анализа документов по умолчанию — `deepseek-v4.1-flash`, для эмбеддингов — `bge-m3` (1024 измерения).
 
 ## Структура проекта
 
@@ -29,9 +29,8 @@ Python, FastAPI, Hermes Agent, ACP, MCP/FastMCP, PostgreSQL, pgvector, React, Ty
 ├── .env.example
 ├── .gitignore
 ├── backend/            # FastAPI-приложение, бизнес-логика и миграции
-├── mcp_server/         # MCP-сервер инструментов МАИ
+│   └── hermes-profile/ # настройки Hermes без секретов
 ├── frontend/           # React + TypeScript
-├── hermes/             # конфигурация Hermes без секретов
 ├── docs/               # архитектура, решения и открытые вопросы
 └── tests/              # тесты проекта
 ```
@@ -54,7 +53,7 @@ Frontend:
 
 ```powershell
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
@@ -65,17 +64,35 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Для Docker-маршрута миграции выполняются отдельно после запуска PostgreSQL:
+Backend применяет миграции при старте в Compose. Веб-интерфейс доступен на `http://localhost:5173`. Маршрут `/ready` проверяет, что PostgreSQL отвечает и схема обновлена до текущей ревизии.
 
-```powershell
-docker compose run --rm backend alembic upgrade head
+Для чата и анализа задайте `LLM_API_KEY` в локальном файле `.env`. `HERMES_MODEL` управляет чатом, `DOCUMENT_MODEL` — анализом документов. Векторный поиск включается, если задать `EMBEDDING_BASE_URL` и `EMBEDDING_API_KEY`. При необходимости укажите `AI_API_CA_BUNDLE=/app/certs/mai-api-ca-chain.pem`. Telegram запускается при наличии `TELEGRAM_BOT_TOKEN`.
+
+## Заявления и правила
+
+Сотрудник публикует редакцию правил на экране «Рабочее место». Абитуриент создаёт черновик, выбирает кампанию, код направления и основание, прикладывает документы и подаёт заявление. Сотрудник проверяет полученный пакет и фиксирует результат. Проверка минимальных баллов выполняется по выбранной редакции правил.
+
+Испытательный реестр ЕГЭ заполняется отдельной командой из каталога `backend`. Файл содержит только синтетические результаты и идентификаторы с префиксом `SYN-`.
+
+```sh
+python -m app.synthetic_ege_registry /path/to/synthetic-results.json
 ```
 
-## Статус разработки
+Пример элемента файла:
 
-Этап 3: реализованы ACP client на официальном Python SDK, lifecycle chat-сессий, MCP HTTP server configuration с доверенным контекстом, Qwen-compatible document analysis, pgvector semantic search при настроенном embedding provider, синхронизация официальных HTTPS-материалов по allowlist, admission requirements и chat UI. Полный ACP smoke test требует штатно настроенного Hermes provider; конкретные Qwen endpoints, официальные домены МАИ, Telegram и ФИС ГИА остаются внешними ограничениями. Подробный статус находится в [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md).
+```json
+{"candidate_id":"SYN-DEMO","subject":"Математика","year":2026,"score":85,"status":"valid"}
+```
 
-Доступные Backend-маршруты включают `/auth/register`, `/auth/login`, `/users/me`, `/applicant/profile`, `/applicant/documents`, `/applicant/documents/completeness`, `/knowledge/sources` и `/knowledge/search`.
+Результат синтетической сверки сохраняется отдельно от баллов, введённых абитуриентом. ФИС ГИА и ЕСИА отсутствуют в архитектуре.
+
+## Поиск по базе знаний
+
+Выдача включает ссылку и редакцию источника. После смены модели эмбеддингов или обновления со старой схемы сотрудник может перестроить векторы через `POST /knowledge/sources/{id}/reindex`. Лексический поиск работает и по источникам, для которых эмбеддинги ещё не построены.
+
+## Проверки
+
+Запустите `python -m pytest tests` из корня после установки `pip install -e './backend[test]'` в тестовое окружение. Скрипт `scripts/e2e_compose.py` проверяет сквозной путь на отдельном стенде с синтетическими данными. Его настройки `MAI_E2E_BASE_URL` и `MAI_E2E_BACKEND_CONTAINER` позволяют выбрать опубликованный Web и контейнер Backend.
 
 ## Правила разработки
 

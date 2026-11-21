@@ -27,20 +27,22 @@ services:
       HERMES_CWD: ${HERMES_CWD:-/app}
       ACP_STARTUP_TIMEOUT_SECONDS: ${ACP_STARTUP_TIMEOUT_SECONDS:-180}
       ACP_PROMPT_TIMEOUT_SECONDS: ${ACP_PROMPT_TIMEOUT_SECONDS:-600}
+      HERMES_MAX_PROCESSES: ${HERMES_MAX_PROCESSES:-8}
+      HERMES_IDLE_TIMEOUT_SECONDS: ${HERMES_IDLE_TIMEOUT_SECONDS:-900}
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://backend:8000/mcp}
-      QWEN_BASE_URL: ${QWEN_BASE_URL:-}
-      QWEN_API_KEY: ${QWEN_API_KEY:-}
-      QWEN_MODEL: ${QWEN_MODEL:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-${QWEN_BASE_URL:-https://api-ai.mai.ru/v1}}
+      LLM_API_KEY: ${LLM_API_KEY:-${QWEN_API_KEY:-}}
+      DOCUMENT_MODEL: ${DOCUMENT_MODEL:-${QWEN_MODEL:-deepseek-v4.1-flash}}
       AI_API_CA_BUNDLE: ${AI_API_CA_BUNDLE:-}
-      OPENAI_BASE_URL: ${QWEN_BASE_URL:-https://api-ai.mai.ru/v1}
-      OPENAI_API_KEY: ${QWEN_API_KEY:-}
-      HERMES_INFERENCE_MODEL: ${QWEN_MODEL:-deepseek-v4.1-flash}
-      HERMES_PROVIDER: openai
+      OPENAI_API_KEY: ${LLM_API_KEY:-${QWEN_API_KEY:-}}
+      HERMES_MODEL: ${HERMES_MODEL:-${QWEN_MODEL:-deepseek-v4.1-flash}}
+      HERMES_BASE_URL: ${HERMES_BASE_URL:-${LLM_BASE_URL:-${QWEN_BASE_URL:-https://api-ai.mai.ru/v1}}}
+      HERMES_REASONING_EFFORT: ${HERMES_REASONING_EFFORT:-low}
       SSL_CERT_FILE: ${AI_API_CA_BUNDLE:-}
       REQUESTS_CA_BUNDLE: ${AI_API_CA_BUNDLE:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
       OFFICIAL_SOURCE_DOMAINS: ${OFFICIAL_SOURCE_DOMAINS:-mai.ru,priem.mai.ru}
       OFFICIAL_SOURCE_ROOT_URLS: ${OFFICIAL_SOURCE_ROOT_URLS:-https://mai.ru,https://priem.mai.ru}
@@ -50,6 +52,12 @@ services:
       # first use; the container has no unrestricted egress and the download
       # hangs the agent turn. Disable it (inherited by hermes-acp via env).
       TIRITH_ENABLED: "false"
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3).close()"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
     ports:
       - "8000:8000"
     volumes:
@@ -64,7 +72,8 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres_data:

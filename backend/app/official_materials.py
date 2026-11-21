@@ -2,39 +2,34 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
 import httpx
+from lxml import etree, html
 
 from app.config import get_settings
 
 
-class _TextExtractor(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.title_parts: list[str] = []
-        self.text_parts: list[str] = []
-        self._in_title = False
-        self._skip_depth = 0
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() == "title":
-            self._in_title = True
-        if tag.lower() in {"script", "style", "noscript"}:
-            self._skip_depth += 1
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag.lower() == "title":
-            self._in_title = False
-        if tag.lower() in {"script", "style", "noscript"} and self._skip_depth:
-            self._skip_depth -= 1
-
-    def handle_data(self, data: str) -> None:
-        if self._skip_depth:
-            return
-        value = " ".join(data.split())
-        if not value:
-            return
-        if self._in_title:
-            self.title_parts.append(value)
-        self.text_parts.append(value)
+def extract_html_content(markup: str) -> tuple[str, str]:
+    if not markup.strip():
+        return "", ""
+    try:
+        tree = html.fromstring(markup)
+    except etree.ParserError as exc:
+        raise ValueError("Page HTML could not be parsed") from exc
+    title = " ".join(" ".join(tree.xpath("//title/text()")).split())
+    etree.strip_elements(tree, "script", "style", "noscript", "svg", "head", "nav", "footer", with_tail=False)
+    for row in list(tree.iter("tr")):
+        cells = [child for child in row if child.tag in {"th", "td"}]
+        if not cells:
+            continue
+        row.text = " | ".join(" ".join(cell.text_content().split()) for cell in cells)
+        for child in list(row):
+            row.remove(child)
+    for node in tree.iter("br", "p", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6"):
+        if not any(ancestor.tag in {"td", "th"} for ancestor in node.iterancestors()):
+            node.tail = "\n" + (node.tail or "")
+            if node.tag != "br":
+                node.text = "\n" + (node.text or "")
+    lines = (" ".join(line.split()).strip() for line in tree.text_content().splitlines())
+    return title, "\n".join(line for line in lines if line)
 
 
 def _validate_official_url(url: str) -> None:
@@ -55,13 +50,20 @@ def fetch_official_material(url: str) -> tuple[str, str, str]:
         response = client.get(url)
         response.raise_for_status()
     _validate_official_url(str(response.url))
-    parser = _TextExtractor()
-    parser.feed(response.text)
-    text = " ".join(parser.text_parts).strip()
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type == "application/pdf":
+        from app.document_service import extract_text
+
+        title, text = str(response.url), extract_text(response.url.path, content_type, response.content) or ""
+    elif content_type == "text/plain":
+        title, text = str(response.url), response.text.strip()
+    elif content_type in {"", "text/html", "application/xhtml+xml"}:
+        title, text = extract_html_content(response.text)
+    else:
+        raise ValueError("Official material must be HTML, text, or a readable PDF")
     if not text:
         raise ValueError("Official material contains no readable text")
-    title = " ".join(parser.title_parts).strip() or str(response.url)
-    return str(response.url), title, text
+    return str(response.url), title or str(response.url), text
 
 
 def discover_official_urls() -> list[str]:
