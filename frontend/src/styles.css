@@ -29,6 +29,11 @@
   --publication-line: #d9e1ea;
   --publication-gutter: clamp(1rem, 3.4vw, 2rem);
   --display-type: "Manrope Variable", "Golos Text Variable", sans-serif;
+  --showcase-deep: #142940;
+  --showcase-mid: #2a4865;
+  --showcase-ice: #e1ebf6;
+  --showcase-line: rgb(212 229 248 / 23%);
+  --showcase-outer: #eaf0f7;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -181,6 +186,7 @@ legend { padding-inline: .35rem; font-weight: 620; }
   grid-template-columns: minmax(0, 1.48fr) minmax(0, 1fr);
   border: 1px solid var(--border);
   border-top: 0;
+  overflow: hidden;
   background: var(--publication-paper);
 }
 .auth-publication {
@@ -189,17 +195,18 @@ legend { padding-inline: .35rem; font-weight: 620; }
   grid-template-columns: minmax(0, 1fr);
   align-content: start;
   border-right: 1px solid var(--border);
+  background: linear-gradient(to bottom, var(--showcase-deep) 57%, var(--showcase-ice) 57%);
 }
 .auth-publication__title {
   padding: clamp(1.3rem, 3.2vw, 2.8rem) var(--publication-gutter) 1rem;
-  color: var(--ink);
+  color: #fff;
   font-family: var(--display-type);
   font-size: clamp(2.15rem, 4.8vw, 4.55rem);
   font-weight: 545;
   line-height: 1.02;
   letter-spacing: -.055em;
 }
-.auth-publication__title span { color: var(--primary); }
+.auth-publication__title span { color: var(--brand-light); }
 .auth-visual, .editorial-photo { min-width: 0; margin: 0; }
 .aircraft-frame { position: relative; }
 .auth-visual img, .editorial-photo img {
@@ -233,7 +240,8 @@ legend { padding-inline: .35rem; font-weight: 620; }
 .auth-switch { display: flex; flex-wrap: wrap; align-items: baseline; gap: .4rem; margin-top: 1.28rem; color: var(--muted); font-size: .83rem; }
 
 .app-shell { min-height: 100vh; }
-.app-shell--home, body:has(.auth-page) { background: var(--publication-paper); }
+.app-shell--home, body:has(.auth-page) { background: var(--showcase-outer); }
+.app-shell--home { padding-top: clamp(.85rem, 3.8vh, 2.6rem); }
 .app-header {
   position: sticky;
   z-index: 42;
@@ -334,24 +342,41 @@ legend { padding-inline: .35rem; font-weight: 620; }
   margin-inline: auto;
 }
 .app-shell--home .app-header {
-  border-bottom: 1px solid var(--publication-line);
-  background: var(--publication-paper);
+  border: 0;
+  border-radius: 6px 6px 0 0;
+  background: var(--showcase-deep);
 }
-.app-shell--home .app-masthead { min-height: 3.65rem; padding-inline: var(--publication-gutter); column-gap: 2rem; }
-.app-shell--home .brand__words strong { font-size: 1.22rem; }
+.app-shell--home .app-masthead {
+  min-height: 3.65rem;
+  padding-inline: var(--publication-gutter);
+  border-bottom: 1px solid var(--showcase-line);
+  column-gap: 2rem;
+}
+.app-shell--home .brand__words strong { color: #fff; font-size: 1.22rem; }
+.app-shell--home .brand__words strong span { color: var(--brand-light); }
 .app-shell--home .brand__words small { display: none; }
+.app-shell--home .app-menu-toggle,
+.app-shell--home .app-menu-toggle:hover:not(:disabled) { color: #fff; }
+.app-shell--home .app-menu-toggle:focus-visible,
+.app-shell--home .brand-button:focus-visible { outline-color: var(--brand-light); }
 
-@media (min-width: 60.0625rem) {
+@media (width > 60rem) {
   .app-shell--home .app-header { position: relative; }
   .app-shell--home .app-nav { margin-inline: auto; }
   .app-shell--home .nav-item {
     align-self: center;
     min-height: 2.6rem;
     padding-inline: clamp(.45rem, 1vw, .85rem);
+    color: var(--brand-light);
     font-size: .82rem;
   }
+  .app-shell--home .nav-item[aria-current="page"] { border-color: var(--brand-light); color: #fff; }
+  .app-shell--home .nav-item:hover:not(:disabled),
+  .app-shell--home .masthead-account__logout:hover:not(:disabled) { background: var(--showcase-mid); color: #fff; }
   .app-shell--home .masthead-account__profile { display: none; }
-  .app-shell--home .masthead-account__logout { font-size: .8rem; }
+  .app-shell--home .masthead-account__logout { color: var(--brand-light); font-size: .8rem; }
+  .app-shell--home .nav-item:focus-visible,
+  .app-shell--home .masthead-account__logout:focus-visible { outline-color: var(--brand-light); }
 }
 
 .home-page {
@@ -360,49 +385,72 @@ legend { padding-inline: .35rem; font-weight: 620; }
   background: var(--publication-paper);
   container-type: inline-size;
 }
-.home-lead {
-  position: relative;
-  display: grid;
-  gap: .68rem;
-  padding: clamp(1.8rem, 5.4cqi, 3.7rem) var(--publication-gutter) 0;
+.home-showcase {
+  --showcase-inset: clamp(1.2rem, 5.5cqi, 4.25rem);
+  isolation: isolate;
+  background: var(--showcase-ice);
 }
-.home-lead__summary {
-  color: var(--muted);
-  font-size: clamp(.82rem, 1.4cqi, 1.02rem);
-  font-weight: 560;
-  line-height: 1.35;
+.home-showcase__base {
+  padding-inline: var(--showcase-inset);
+}
+.home-lead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  min-height: clamp(16rem, 30cqi, 22rem);
+  padding: 1.5rem var(--showcase-inset) clamp(1.9rem, 3.65cqi, 2.65rem);
+  background: radial-gradient(ellipse at 42% 100%, var(--showcase-mid), var(--showcase-deep) 83%);
 }
 .home-lead h1 {
   position: relative;
   z-index: 1;
-  width: fit-content;
-  color: var(--ink);
+  display: grid;
+  gap: .72rem;
+  color: #fff;
   font-family: var(--display-type);
-  font-size: clamp(1.8rem, 7.45cqi, 5.25rem);
-  font-weight: 540;
-  line-height: 1.06;
-  letter-spacing: -.061em;
+  font-size: clamp(2.8rem, 8.1cqi, 5.65rem);
+  font-weight: 620;
+  line-height: .97;
+  letter-spacing: -.057em;
+  text-align: right;
 }
-.home-lead__place { color: var(--primary); white-space: nowrap; }
-.editorial-photo { border-bottom: 1px solid var(--publication-line); }
+.home-lead__context {
+  color: var(--brand-light);
+  font-size: .295em;
+  font-weight: 560;
+  line-height: 1.17;
+  letter-spacing: -.005em;
+}
+.home-lead__place { white-space: nowrap; }
 .editorial-photo .aircraft-frame {
   width: 100%;
-  aspect-ratio: 4.4;
-  min-height: 9.8rem;
+  height: clamp(9.3rem, 19.6cqi, 13.7rem);
 }
 .editorial-photo img {
   position: absolute;
   z-index: 2;
-  top: -2.65cqi;
-  right: var(--publication-gutter);
-  width: 72%;
+  top: -7.7cqi;
+  left: 1.25%;
+  width: 80%;
   pointer-events: none;
 }
-.editorial-action {
+.editorial-photo__action {
   position: absolute;
   z-index: 3;
-  left: var(--publication-gutter);
-  bottom: clamp(.9rem, 4cqi, 2.6rem);
+  right: 0;
+  top: clamp(1.05rem, 2.7cqi, 2rem);
+  display: grid;
+  justify-items: end;
+  gap: .72rem;
+  color: var(--showcase-deep);
+  text-align: right;
+}
+.editorial-photo__action p {
+  max-width: 23ch;
+  font-size: .85rem;
+  line-height: 1.4;
+}
+.editorial-action {
   min-height: 2.85rem;
   justify-content: space-between;
   gap: 1rem;
@@ -501,16 +549,25 @@ legend { padding-inline: .35rem; font-weight: 620; }
   .auth-main { padding-block: 0; }
   .auth-heading { margin-bottom: 1rem; }
   .auth-form { gap: .75rem; }
+  .app-shell--home { padding-top: 0; }
   .app-shell--home .app-header, .app-shell--home .app-column { width: 100%; }
+  .app-shell--home .app-header { border-radius: 0; }
   .app-shell--home .app-masthead { min-height: 3.25rem; }
-  .home-lead { gap: .42rem; min-width: 0; padding-top: 1.72rem; }
-  .home-lead h1 { font-size: clamp(1.35rem, 8.65cqi, 3.95rem); }
-  .editorial-photo .aircraft-frame { aspect-ratio: 2.65; min-height: 8.65rem; }
-  .editorial-photo img {
-    top: -1.8cqi;
-    right: 4%;
-    width: 92%;
+  .home-lead {
+    align-items: flex-end;
+    min-height: clamp(12.4rem, 54cqi, 16rem);
+    padding-bottom: clamp(2rem, 9.5cqi, 3.75rem);
   }
+  .home-lead h1 { gap: .43rem; font-size: clamp(2.65rem, 11cqi, 4.3rem); }
+  .home-lead__context { font-size: .32em; }
+  .editorial-photo .aircraft-frame { height: clamp(8.3rem, 30cqi, 10.35rem); }
+  .editorial-photo img {
+    top: -10.25cqi;
+    left: 0;
+    width: 100%;
+  }
+  .editorial-photo__action { top: auto; bottom: 1rem; }
+  .editorial-photo__action p { display: none; }
   .editorial-action { min-height: 2.55rem; font-size: .8rem; }
   .telegram-panel { grid-template-columns: auto minmax(0, 1fr); }
   .telegram-panel__action { grid-column: 2; justify-self: start; }

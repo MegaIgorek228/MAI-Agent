@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 
 import type { DocumentItem, Profile, User } from "./api";
-import { EditorialSpread } from "./EditorialSpread";
+import { CabinetLinks, EditorialSpread } from "./EditorialSpread";
 import { Icon } from "./Icon";
 
 export type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
@@ -258,7 +258,6 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
 
 type HomePageProps = {
   user: User;
-  profile: Profile | null;
   documents: DocumentItem[];
   pairingCode: string;
   pairingPending: boolean;
@@ -266,13 +265,14 @@ type HomePageProps = {
   onNavigate: (view: View) => void;
 };
 
-export function HomePage({ user, profile, documents, pairingCode, pairingPending, onPair, onNavigate }: HomePageProps) {
+export function HomePage({ user, documents, pairingCode, pairingPending, onPair, onNavigate }: HomePageProps) {
   const [copiedCode, setCopiedCode] = useState("");
+  const staff = isStaff(user);
   const sections: { view: View; description: string }[] = [];
   if (user.role === "applicant") {
     sections.push({ view: "applications", description: "Подача заявления и проверка статуса" });
   }
-  if (isStaff(user)) {
+  if (staff) {
     sections.push({ view: "staff", description: "Проверка заявлений и публикация правил" });
   }
   if (user.role !== "student") {
@@ -285,24 +285,28 @@ export function HomePage({ user, profile, documents, pairingCode, pairingPending
   }
   sections.push({ view: "profile", description: "Контакты и параметры поступления" });
 
-  const firstName = profile?.first_name?.trim();
-
   return (
     <div className="home-page">
-      <section className="home-lead" aria-labelledby="home-title">
-        <p className="home-lead__summary">
-          {isStaff(user) ? "Работа приёмной комиссии" : "Личный кабинет абитуриента"}
-        </p>
-        <h1 id="home-title">
-          {isStaff(user) ? "Приёмная кампания" : <>Поступление <span className="home-lead__place">в МАИ</span></>}
-        </h1>
+      <section className="home-showcase" aria-labelledby="home-title">
+        <div className="home-lead">
+          <h1 id="home-title">
+            <span className="home-lead__context">{staff ? "Приёмная " : "Поступление "}</span>
+            <span className="home-lead__place">{staff ? "кампания" : "в МАИ"}</span>
+          </h1>
+        </div>
+        <div className="home-showcase__base">
+          <AircraftPhoto className="editorial-photo" action={
+            <div className="editorial-photo__action">
+              <p>{staff ? "Правила приёма и работа с заявлениями." : "Сроки, документы и правила поступления."}</p>
+              <button className="editorial-action" type="button" onClick={() => onNavigate("agent")}>
+                Спросить ассистента <Icon name="arrow-right" />
+              </button>
+            </div>
+          } />
+          <CabinetLinks sections={sections} onNavigate={onNavigate} />
+        </div>
       </section>
-      <AircraftPhoto className="editorial-photo" action={
-        <button className="editorial-action" type="button" onClick={() => onNavigate("agent")}>
-          Спросить ассистента <Icon name="arrow-right" />
-        </button>
-      } />
-      <EditorialSpread sections={sections} firstName={firstName} staff={isStaff(user)} photos={aircraft} onNavigate={onNavigate} />
+      <EditorialSpread photos={aircraft} />
       <section className="telegram-panel" aria-labelledby="telegram-title">
         <div className="telegram-panel__icon"><Icon name="telegram" /></div>
         <div className="telegram-panel__text">
