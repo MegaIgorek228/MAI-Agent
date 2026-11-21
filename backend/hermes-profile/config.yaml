@@ -1,0 +1,65 @@
+# =============================================================================
+# MAI-Agent container Hermes home (baked into the backend image at
+# /root/.hermes). Same shape as the host isolated profile
+# (%LOCALAPPDATA%\MAI-Agent\acp): ACP + native multimodal (Qwen via MAI API).
+# No secrets here — the MAI API key comes from the OPENAI_API_KEY env var
+# (compose injects it; providers.mai.key_env points at it).
+# =============================================================================
+
+# NOTE: provider must be the named custom provider (custom:mai) — hermes-agent
+# 0.19.0 has no built-in "openai" provider ("Unknown provider 'openai'");
+# custom:mai resolves to an OpenAI-compatible chat_completions client pointed
+# at the MAI relay (verified: resolve_runtime_provider('custom:mai')).
+model:
+  default: "qwen3.8-27b"
+  provider: "custom:mai"
+
+agent:
+  # Native multimodality: user images (ACP ImageContentBlock -> image_url data
+  # URL) go straight into the main model's messages. No vision tool detour.
+  image_input_mode: native
+  reasoning_effort: "medium"   # supported by MAI API (xhigh, medium, low)
+
+# Named custom provider: the MAI relay. Auxiliary slots route through it
+# (provider: custom:mai) so their wire shape comes from the custom-provider
+# profile — the override in plugins/model-providers/custom/ projects
+# thinking-disabled calls as reasoning_effort=medium (the relay 400s on the
+# "none" shape the bundled profile would otherwise emit).
+providers:
+  mai:
+    base_url: "https://api-ai.mai.ru/v1"
+    key_env: OPENAI_API_KEY
+
+# Auxiliary tasks stay on the main (MAI/Qwen) provider — never Nous.
+auxiliary:
+  vision:
+    provider: custom:mai
+    reasoning_effort: low
+  web_extract:
+    provider: custom:mai
+    reasoning_effort: low
+  title_generation:
+    provider: custom:mai
+    reasoning_effort: low
+  session_search:
+    provider: custom:mai
+    reasoning_effort: low
+  compression:
+    provider: custom:mai
+    reasoning_effort: low
+
+# ACP platform toolsets: same surface as the host isolated profile
+# (no vision toolset — image analysis is native multimodal).
+platform_toolsets:
+  acp:
+    - web
+    - terminal
+    - file
+    - skills
+    - todo
+    - memory
+    - session_search
+    - clarify
+    - code_execution
+    - delegation
+    - connections

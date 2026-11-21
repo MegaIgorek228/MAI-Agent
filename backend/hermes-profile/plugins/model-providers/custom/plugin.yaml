@@ -1,0 +1,10 @@
+name: custom-provider
+kind: model-provider
+version: 1.0.2
+description: >-
+  MAI-Agent override of the bundled custom-provider profile (hermes-agent
+  0.19.0 API). Thinking-disabled auxiliary calls (title generation, smart
+  approvals) are projected as reasoning_effort=medium on the MAI relay
+  (api-ai.mai.ru), which rejects "none" with HTTP 400. All other endpoints
+  keep the bundled behavior.
+author: MAI-Agent

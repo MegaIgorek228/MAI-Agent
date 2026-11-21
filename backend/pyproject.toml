@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mai-agent-backend"
+version = "0.1.0"
+description = "FastAPI backend for MAI-Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic>=1.14,<2",
+    "agent-client-protocol>=0.12.1,<1",
+    "fastapi>=0.115,<1",
+    "fastmcp>=2,<3",
+    "email-validator>=2.2,<3",
+    "pgvector>=0.3,<1",
+    "pydantic-settings>=2.7,<3",
+    "psycopg[binary]>=3.2,<4",
+    "PyJWT>=2.10,<3",
+    "pwdlib[argon2]>=0.2,<1",
+    "pypdf>=5,<7",
+    "python-docx>=1.1,<2",
+    "Pillow>=11,<13",
+    "openai>=1.60,<2",
+    "httpx>=0.28,<1",
+    "sqlalchemy>=2.0,<3",
+    "uvicorn[standard]>=0.34,<1",
+]
+
+[project.optional-dependencies]
+test = [
+    "httpx>=0.28,<1",
+    "pytest>=8.3,<9",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+ignore = ["B008"]
+
+[tool.setuptools.packages.find]
+where = ["."]

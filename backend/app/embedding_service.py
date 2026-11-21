@@ -1,0 +1,39 @@
+from openai import OpenAI
+import httpx
+
+from app.config import get_settings
+
+
+class EmbeddingProviderUnavailable(RuntimeError):
+    """Raised when no OpenAI-compatible embedding provider is configured."""
+
+
+def _client() -> OpenAI:
+    settings = get_settings()
+    if not settings.embedding_base_url or not settings.embedding_api_key:
+        raise EmbeddingProviderUnavailable(
+            "Configure EMBEDDING_BASE_URL and EMBEDDING_API_KEY for semantic search"
+        )
+    http_client = httpx.Client(verify=settings.ai_api_ca_bundle or True, timeout=90)
+    return OpenAI(
+        base_url=settings.embedding_base_url,
+        api_key=settings.embedding_api_key,
+        http_client=http_client,
+    )
+
+
+def embed_texts(texts: list[str]) -> list[list[float]]:
+    settings = get_settings()
+    response = _client().embeddings.create(
+        model=settings.embedding_model,
+        input=texts,
+    )
+    vectors = [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+    if any(len(vector) != settings.embedding_dimensions for vector in vectors):
+        raise EmbeddingProviderUnavailable("Embedding provider returned an unexpected vector dimension")
+    return vectors
+
+
+def embeddings_configured() -> bool:
+    settings = get_settings()
+    return bool(settings.embedding_base_url and settings.embedding_api_key)
