@@ -218,3 +218,45 @@ def test_registry_has_no_write_routes(client):
     for path in registry_routes:
         methods = set(schema["paths"][path]) - {"parameters"}
         assert methods == {"get"}, f"registry route allows writes: {methods} {path}"
+
+
+def test_confirm_refreshes_scores_after_registry_update(client):
+    """Re-confirming a bound candidate re-reads the registry: when the
+    reference data changes, the application's scores follow it."""
+    from sqlalchemy import select
+
+    from app.models import SyntheticEgeResult
+
+    seed_registry(client)
+    headers = auth_headers(client)
+    application_id = create_application(client, headers)
+
+    confirmed = client.post(
+        f"/applicant/applications/{application_id}/ege/synthetic-confirm",
+        headers=headers, json={"candidate_id": "SYN-1001"},
+    )
+    assert confirmed.status_code == 200
+    initial = {(score["subject"], score["year"]): score["score"] for score in confirmed.json()["scores"]}
+    physics = [key for key in initial if "изика" in key[0]]
+    assert len(physics) == 1 and initial[physics[0]] == 100
+
+    # The reference data changes (mirrors an operator editing the registry).
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(SyntheticEgeResult).where(
+            SyntheticEgeResult.candidate_id == "SYN-1001",
+            SyntheticEgeResult.year == 2026,
+        )))
+        physics_row = next(row for row in rows if "изика" in row.subject)
+        physics_row.score = 79
+        db.commit()
+
+    refreshed = client.post(
+        f"/applicant/applications/{application_id}/ege/synthetic-confirm",
+        headers=headers, json={"candidate_id": "SYN-1001"},
+    )
+    assert refreshed.status_code == 200
+    updated = {(score["subject"], score["year"]): score["score"] for score in refreshed.json()["scores"]}
+    assert updated[physics[0]] == 79
+    # Other subjects are untouched.
+    russian = [key for key in updated if "русский" in key[0].lower()]
+    assert russian and updated[russian[0]] == 88

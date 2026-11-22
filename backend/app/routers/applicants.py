@@ -10,6 +10,7 @@ from app.db import get_db
 from app.dependencies import bearer_scheme, get_current_user, require_roles
 from app.document_service import (
     SUPPORTED_IMAGE_TYPES, create_document, document_checklist,
+    normalize_document_type,
 )
 from app.llm_service import LLMProviderUnavailable, analyze_document
 from app.models import (
@@ -92,6 +93,7 @@ def upload_document(
     if len(content) > max_size:
         raise HTTPException(status_code=413, detail="File is too large")
     submitted_document_type = document_type if document_type is not None else legacy_document_type
+    submitted_document_type = normalize_document_type(db, submitted_document_type)
     try:
         document = create_document(
             db, owner_id=current_user.id, filename=file.filename or "document",
@@ -178,7 +180,7 @@ def update_document_type(
     )
     if document is None:
         raise HTTPException(status_code=404, detail="Document not found")
-    new_type = (payload.document_type or "").strip() or None
+    new_type = normalize_document_type(db, payload.document_type)
     if new_type != document.document_type:
         if any(item.status not in {"draft", "needs_changes"} for item in application_rows):
             raise HTTPException(status_code=409, detail="Document is attached to a submitted application")

@@ -15,12 +15,13 @@ import {
   getApplications,
   getExamScores,
   Profile,
+  refreshExamScores,
   saveApplication,
   saveExamScores,
   submitApplication,
   verifyExamScores
 } from "./api";
-import { CompletenessResult, documentStatusLabel, requestErrorMessage } from "./Documents";
+import { CompletenessResult, documentStatusLabel, documentTypeLabel, requestErrorMessage } from "./Documents";
 import { Icon } from "./Icon";
 import { WorkflowEmpty, WorkflowHeader, WorkflowNotice, WorkflowStatus } from "./WorkflowUI";
 
@@ -225,6 +226,9 @@ function ApplicationEditor({ token, documents, profile, application, rules, onSa
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const applicationId = application?.id;
+  const typeTitles: Record<string, string> = Object.fromEntries(
+    rules.flatMap((rule) => rule.document_requirements.map((item) => [item.document_type, item.title] as const))
+  );
   const attachedById = new Map(attachedDocuments.map((item) => [item.id, item]));
   const displayDocuments = canEdit
     ? documents.map((item) => attachedById.get(item.id) ?? item)
@@ -338,7 +342,7 @@ function ApplicationEditor({ token, documents, profile, application, rules, onSa
               }} />
               <span className="workflow-check-text">
                 <strong>{document.filename}</strong>
-                <small>{document.document_type ?? "Тип не указан"}</small>
+                <small>{documentTypeLabel(document.document_type, typeTitles)}</small>
                 {document.review_message && <small>{document.review_message}</small>}
               </span>
               <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
@@ -459,6 +463,20 @@ function ExamScoreEditor({ token, applicationId, defaultYear, canEdit, onDirty, 
     }
   };
 
+  const refresh = async () => {
+    setPending(true);
+    setError("");
+    setMessage("");
+    try {
+      showScores(await refreshExamScores(token, applicationId, syntheticId.trim().toUpperCase()));
+      setMessage("Баллы обновлены из тестового реестра.");
+    } catch (requestError) {
+      setError(requestErrorMessage(requestError, "Не удалось обновить результаты из реестра"));
+    } finally {
+      setPending(false);
+    }
+  };
+
   return (
     <div className="workflow-scores">
       <div className="workflow-panel-heading"><h3>Заявленные результаты ЕГЭ</h3></div>
@@ -509,6 +527,9 @@ function ExamScoreEditor({ token, applicationId, defaultYear, canEdit, onDirty, 
             </>
           )}
           <button className="workflow-secondary" type="button" disabled={pending || dirty || !syntheticId || !scores.length} onClick={verify}>Сверить с тестовым реестром</button>
+          {canEdit && (
+            <button className="workflow-secondary" type="button" disabled={pending || dirty || !syntheticId} onClick={refresh}>Обновить баллы из тестового реестра</button>
+          )}
         </div>
       </form>
       {pending && <p role="status">Загрузка результатов…</p>}

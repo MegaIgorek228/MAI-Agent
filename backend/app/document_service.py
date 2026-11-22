@@ -10,14 +10,81 @@ from docx.table import Table
 from lxml.etree import XMLSyntaxError
 from pypdf import PdfReader
 from pypdf.errors import PyPdfError
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import Document
+from app.models import AdmissionRuleSet, Document
 
 
 class DocumentExtractionError(ValueError):
     """A supported file cannot be read by its parser."""
+
+
+# Fallback names for the most common documents, used when no admission rule
+# declaring the title exists. Values are the machine codes rules use.
+DOCUMENT_TYPE_ALIASES = {
+    "паспорт": "passport",
+    "аттестат": "education",
+    "документ об образовании": "education",
+}
+
+
+def normalize_document_type(db: Session, raw: str | None) -> str | None:
+    """Map a user-supplied document type onto the machine code of a rule.
+
+    The interface shows the Russian titles from the published rules, while
+    the requirement check matches the codes. Accept a code (case-insensitive)
+    or a rule title and return the canonical code; unknown values pass
+    through trimmed so free-text types keep working.
+    """
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    code = value.lower()
+    latest = (
+        select(
+            AdmissionRuleSet.campaign_year,
+            AdmissionRuleSet.program,
+            AdmissionRuleSet.admission_basis,
+            func.max(AdmissionRuleSet.revision).label("revision"),
+        )
+        .group_by(
+            AdmissionRuleSet.campaign_year,
+            AdmissionRuleSet.program,
+            AdmissionRuleSet.admission_basis,
+        )
+        .subquery()
+    )
+    requirement_rows = list(db.scalars(
+        select(AdmissionRuleSet.document_requirements)
+        .join(
+            latest,
+            and_(
+                AdmissionRuleSet.campaign_year == latest.c.campaign_year,
+                AdmissionRuleSet.program == latest.c.program,
+                AdmissionRuleSet.admission_basis == latest.c.admission_basis,
+                AdmissionRuleSet.revision == latest.c.revision,
+            ),
+        )
+    ))
+    canonical: dict[str, str] = {}
+    title_to_code: dict[str, str] = {}
+    for requirements in requirement_rows:
+        for item in requirements or []:
+            item_code = str(item.get("document_type") or "").strip()
+            item_title = str(item.get("title") or "").strip()
+            if item_code:
+                canonical.setdefault(item_code.lower(), item_code)
+            if item_code and item_title:
+                title_to_code.setdefault(item_title.lower(), item_code)
+    if code in canonical:
+        return canonical[code]
+    if code in title_to_code:
+        return title_to_code[code]
+    return DOCUMENT_TYPE_ALIASES.get(code, value)
 
 
 def _docx_text(container) -> str:

@@ -26,7 +26,7 @@ import {
 } from "./api";
 import { achievementCategory, achievementLevel, achievementStatus } from "./Achievements";
 import { ApplicationHistory, applicationStatus, Requirements, Verification } from "./Admissions";
-import { documentStatusLabel, requestErrorMessage } from "./Documents";
+import { documentStatusLabel, documentTypeLabel, requestErrorMessage } from "./Documents";
 import { Icon } from "./Icon";
 import { WorkflowEmpty, WorkflowHeader, WorkflowNotice, WorkflowStatus } from "./WorkflowUI";
 
@@ -820,6 +820,9 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
 
   const { application, applicant, documents, ege, requirements } = detail;
   const statuses = nextStatuses[application.status] ?? [];
+  const typeTitles: Record<string, string> = Object.fromEntries(
+    (requirements.rules?.document_requirements ?? []).map((item) => [item.document_type, item.title] as const)
+  );
 
   return (
     <section className="workflow-panel workflow-editor">
@@ -855,7 +858,7 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
               <span className="workflow-mark"><Icon name="file" /></span>
               <div>
                 <h5>{document.filename}</h5>
-                <small>{document.document_type ?? "Тип не указан"}</small>
+                <small>{documentTypeLabel(document.document_type, typeTitles)}</small>
               </div>
               <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
             </div>

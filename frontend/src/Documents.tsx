@@ -21,7 +21,28 @@ const documentStatus: Record<string, string> = {
   rejected: "Отклонён"
 };
 
-const commonDocumentTypes = ["Паспорт", "Аттестат", "Диплом", "СНИЛС", "Заявление", "Согласие на зачисление"];
+const commonDocumentTypes: { value: string; label: string }[] = [
+  { value: "passport", label: "Паспорт" },
+  { value: "education", label: "Документ об образовании (аттестат)" },
+  { value: "Диплом", label: "Диплом" },
+  { value: "СНИЛС", label: "СНИЛС" },
+  { value: "Заявление", label: "Заявление" },
+  { value: "Согласие на зачисление", label: "Согласие на зачисление" }
+];
+
+// Russian display names for the machine codes the backend uses when a
+// published rule with a matching title is not loaded.
+const documentTypeLabels: Record<string, string> = {
+  passport: "Паспорт",
+  education: "Документ об образовании",
+  evidence: "Документ-подтверждение"
+};
+
+export function documentTypeLabel(type: string | null | undefined, titles?: Record<string, string>) {
+  if (!type) return "Тип не указан";
+  const known = titles?.[type] ?? documentTypeLabels[type.toLowerCase()];
+  return known ?? type;
+}
 
 export function documentStatusLabel(status: string) {
   return documentStatus[status] ?? status;
@@ -110,23 +131,36 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
   const [error, setError] = useState("");
   const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [showTypes, setShowTypes] = useState<Record<number, boolean>>({});
-  const [configuredTypes, setConfiguredTypes] = useState<string[]>([]);
+  const [configuredTypes, setConfiguredTypes] = useState<{ value: string; label: string }[]>([]);
 
   useEffect(() => {
     let ignore = false;
     getAdmissionRules(token).then((rules) => {
-      if (!ignore) setConfiguredTypes(rules.flatMap((rule) => rule.document_requirements.map(({ document_type }) => document_type)));
+      if (!ignore) setConfiguredTypes(rules.flatMap((rule) =>
+        rule.document_requirements.map(({ document_type, title }) => ({
+          value: document_type,
+          label: title || document_type
+        }))
+      ));
     }).catch(() => {
       if (!ignore) setConfiguredTypes([]);
     });
     return () => { ignore = true; };
   }, [token]);
 
-  const documentTypes = [...new Set([
-    ...configuredTypes,
-    ...commonDocumentTypes,
-    ...documents.flatMap((item) => item.document_type ? [item.document_type] : [])
-  ])];
+  // The select shows the Russian titles but submits the machine codes, so a
+  // choice like «Паспорт» is stored as the code the published rule expects.
+  // Rules win over the common list; first occurrence wins (Map keeps the LAST
+  // entry for a duplicate key, so build the map with explicit first-wins).
+  const typeTitles: Record<string, string> = Object.fromEntries(configuredTypes.map((item) => [item.value, item.label]));
+  const typeOptionMap = new Map<string, { value: string; label: string }>();
+  for (const item of [...configuredTypes, ...commonDocumentTypes,
+    ...documents.flatMap((doc) => doc.document_type
+      ? [{ value: doc.document_type, label: typeTitles[doc.document_type] ?? doc.document_type }]
+      : [])]) {
+    if (!typeOptionMap.has(item.value)) typeOptionMap.set(item.value, item);
+  }
+  const documentTypeOptions = [...typeOptionMap.values()];
 
   const run = async (task: () => Promise<void>) => {
     setError("");
@@ -188,11 +222,10 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
           <form onSubmit={upload}>
             <label>
               Тип документа
-              <input name="document_type" list="document-types" placeholder="Например, паспорт" maxLength={100} required disabled={pending} />
+              <select name="document_type" required disabled={pending}>
+                {documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+              </select>
             </label>
-            <datalist id="document-types">
-              {documentTypes.map((value) => <option key={value} value={value} />)}
-            </datalist>
             <label className="workflow-dropzone">
               <span className="workflow-mark"><Icon name="upload" /></span>
               <span className="workflow-dropzone-copy">
@@ -244,7 +277,7 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
                     <span className="workflow-mark"><Icon name="file" /></span>
                     <div>
                       <h4>{document.filename}</h4>
-                      <small>{document.document_type ?? "Тип не указан"} · {fileSize(document.size_bytes)}</small>
+                      <small>{documentTypeLabel(document.document_type, typeTitles)} · {fileSize(document.size_bytes)}</small>
                     </div>
                   </div>
                   <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
@@ -265,7 +298,10 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
                   <form className="workflow-inline-form" onSubmit={(event) => updateType(event, document)}>
                     <label>
                       Тип документа
-                      <input name="document_type" defaultValue={document.document_type ?? ""} list="document-types" maxLength={100} disabled={pending} />
+                      <select name="document_type" defaultValue={document.document_type ?? ""} disabled={pending}>
+                        <option value="">Без типа</option>
+                        {documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                      </select>
                     </label>
                     <button type="submit" disabled={pending}>Сохранить тип</button>
                   </form>

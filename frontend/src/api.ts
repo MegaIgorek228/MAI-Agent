@@ -523,6 +523,13 @@ export const verifyExamScores = (token: string, id: number) =>
     headers: { Authorization: `Bearer ${token}` }
   });
 
+export const refreshExamScores = (token: string, id: number, candidateId: string) =>
+  apiRequest<ExamScores>(`${applicationsPath}/${id}/ege/synthetic-confirm`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ candidate_id: candidateId })
+  });
+
 export const getAdmissionRules = (token: string) =>
   apiRequest<AdmissionRule[]>("/applicant/admission-rules", {
     headers: { Authorization: `Bearer ${token}` }
