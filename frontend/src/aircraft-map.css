@@ -30,7 +30,7 @@
 .flight-map__heading p { color: var(--muted); font-size: .89rem; }
 .flight-map[data-view="home"] .flight-map__heading p { max-width: 30ch; }
 .flight-map__rotate-hint { display: none; }
-.flight-map:has([data-aircraft-status="ready"]) .flight-map__rotate-hint { display: inline; }
+.flight-map:has([data-aircraft-status]:not([data-aircraft-status="unavailable"])) .flight-map__rotate-hint { display: inline; }
 
 .flight-map__back {
   min-height: 2.5rem;
@@ -198,7 +198,7 @@
   .flight-map[data-view="home"] .flight-map__heading { display: grid; justify-content: start; gap: .45rem; }
   .flight-map[data-view="home"] .flight-map__heading p { max-width: none; font-size: .77rem; }
   .flight-map__scene { height: clamp(10.2rem, 44cqi, 16.5rem); }
-  .flight-map[data-view="home"] .flight-map__scene:has([data-aircraft-status="ready"]) {
+  .flight-map[data-view="home"] .flight-map__scene:has([data-aircraft-status]:not([data-aircraft-status="unavailable"])) {
     height: clamp(12rem, 49cqi, 18rem);
   }
   .flight-map[data-view="home"] .aircraft-scene__canvas {

@@ -187,7 +187,7 @@ legend { padding-inline: .35rem; font-weight: 620; }
 .auth-stage__visual {
   position: absolute;
   inset: 0;
-  --aircraft-composition-x: .08;
+  --aircraft-composition-x: .045;
   --aircraft-tools-left: clamp(1.15rem, 5.6vw, 6rem);
   --aircraft-tools-right: auto;
   --aircraft-tools-bottom: clamp(1.15rem, 5vh, 3rem);

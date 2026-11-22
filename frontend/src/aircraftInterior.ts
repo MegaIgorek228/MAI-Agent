@@ -1,16 +1,120 @@
 import {
   BoxGeometry,
   BufferGeometry,
+  CatmullRomCurve3,
   CylinderGeometry,
+  ExtrudeGeometry,
+  Float32BufferAttribute,
   Group,
+  LatheGeometry,
   Material,
   Mesh,
   MeshStandardMaterial,
+  Shape,
+  Vector2,
+  Vector3,
 } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 type Vector = readonly [number, number, number];
+type Span = readonly [number, number];
+
+const linerHeight = 1.083;
+const linerWidth = 1.097;
+const windowHeight: Span = [-.048, .327];
+const windowWidth = .386;
+const windowCorner = .068;
+const windowColumns = 14;
+
+function liningAngle(y: number) {
+  return Math.asin(Math.max(-1, Math.min(1, y / linerHeight)));
+}
+
+function liningDepth(y: number) {
+  return -linerWidth * Math.cos(liningAngle(y));
+}
+
+function windowLimits(relativeX: number): Span {
+  const cornerReach = Math.max(0, windowCorner - (windowWidth / 2 - Math.abs(relativeX)));
+  const inset = windowCorner - Math.sqrt(Math.max(0, windowCorner ** 2 - cornerReach ** 2));
+  return [windowHeight[0] + inset, windowHeight[1] - inset];
+}
+
+function createSurface(positions: number[], uv: number[], indices: number[], normals?: number[]) {
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("uv", new Float32BufferAttribute(uv, 2));
+  geometry.setIndex(indices);
+  if (normals) geometry.setAttribute("normal", new Float32BufferAttribute(normals, 3));
+  else geometry.computeVertexNormals();
+  return geometry;
+}
+
+function liningStrip(span: Span, limits: (x: number) => Span, columns: number) {
+  const divisions = 24;
+  const positions: number[] = [];
+  const normals: number[] = [];
+  const uv: number[] = [];
+  const indices: number[] = [];
+  for (let column = 0; column <= columns; column += 1) {
+    const x = span[0] + (span[1] - span[0]) * column / columns;
+    const [bottom, top] = limits(x);
+    for (let row = 0; row <= divisions; row += 1) {
+      const angle = bottom + (top - bottom) * row / divisions;
+      const sine = Math.sin(angle);
+      const cosine = Math.cos(angle);
+      const normalY = -sine / linerHeight;
+      const normalZ = cosine / linerWidth;
+      const normalLength = Math.hypot(normalY, normalZ);
+      positions.push(x, linerHeight * sine, -linerWidth * cosine);
+      normals.push(0, normalY / normalLength, normalZ / normalLength);
+      uv.push(x, angle);
+      if (column < columns && row < divisions) {
+        const vertex = column * (divisions + 1) + row;
+        const next = vertex + divisions + 1;
+        indices.push(vertex, next, next + 1, vertex, next + 1, vertex + 1);
+      }
+    }
+  }
+  return createSurface(positions, uv, indices, normals);
+}
+
+function windowContour(center: number, scale: number, recess: number) {
+  const lower: Vector[] = [];
+  const upper: Vector[] = [];
+  const middleY = (windowHeight[0] + windowHeight[1]) / 2;
+  for (let column = 0; column <= windowColumns; column += 1) {
+    const offset = windowWidth * (column / windowColumns - .5);
+    const x = center + offset * scale;
+    const [bottom, top] = windowLimits(offset).map((y) => middleY + scale * (y - middleY));
+    lower.push([x, bottom, liningDepth(bottom) - recess]);
+    upper.push([x, top, liningDepth(top) - recess]);
+  }
+  return lower.concat(upper.reverse());
+}
+
+function windowReveal(outer: Vector[], inner: Vector[]) {
+  const positions = outer.concat(inner).flat();
+  const uv = outer.concat(inner).flatMap(([x, y]) => [x, y]);
+  const indices: number[] = [];
+  for (let index = 0; index < outer.length; index += 1) {
+    const next = (index + 1) % outer.length;
+    indices.push(index, next, next + outer.length, index, next + outer.length, index + outer.length);
+  }
+  return createSurface(positions, uv, indices);
+}
+
+function windowGlass(contour: Vector[], x: number, recess: number) {
+  const y = (windowHeight[0] + windowHeight[1]) / 2;
+  const positions = [x, y, liningDepth(y) - recess, ...contour.flat()];
+  const uv = [x, y, ...contour.flatMap(([pointX, pointY]) => [pointX, pointY])];
+  const indices: number[] = [];
+  for (let index = 0; index < contour.length; index += 1) {
+    indices.push(0, index + 1, (index + 1) % contour.length + 1);
+  }
+  return createSurface(positions, uv, indices);
+}
 
 export function createAircraftInterior(): Group {
   const floor = -.57;
@@ -73,6 +177,46 @@ export function createAircraftInterior(): Group {
       : new BoxGeometry(...size), material, position);
   }
 
+  function seatShell(parent: Group, material: Material, size: Vector, position: Vector, radius: number, back: boolean) {
+    const key = `seat-shell:${size.join(",")}:${radius}:${back}`;
+    return place(parent, key, () => {
+      const geometry = new RoundedBoxGeometry(...size, radius >= .03 ? 2 : 1, radius);
+      const coordinates = geometry.getAttribute("position");
+      const normals = geometry.getAttribute("normal");
+      for (let index = 0; index < coordinates.count; index += 1) {
+        const x = coordinates.getX(index);
+        const y = coordinates.getY(index);
+        const z = coordinates.getZ(index);
+        const span = z * 2 / size[2];
+        let nx = normals.getX(index);
+        let ny = normals.getY(index);
+        let nz = normals.getZ(index);
+        if (back) {
+          const height = y * 2 / size[1];
+          const shoulders = 1 - .10 * Math.abs(height - .30);
+          const lumbar = .032 * Math.exp(-10 * (height + .31) ** 2);
+          // Both shell and cushion taper towards the neck and support the lumbar curve.
+          coordinates.setXYZ(index, x - lumbar + .028 * span * span + .021 * height * height, y, z * shoulders);
+          nz = (nz - nx * .056 * span * 2 / size[2]) / shoulders;
+          ny += ((.10 * z * Math.sign(height - .30) * nz) - (20 * lumbar * (height + .31) + .042 * height) * nx)
+            * 2 / size[1];
+        } else {
+          const depth = x * 2 / size[0];
+          const taper = .95 + .05 * depth;
+          const support = .022 * span * span - .015 * depth * depth;
+          coordinates.setXYZ(index, x, y + support, z * taper);
+          nz = (nz - ny * .044 * span * 2 / size[2]) / taper;
+          nx += (.03 * depth * ny - .05 * z * nz) * 2 / size[0];
+        }
+        const normalLength = Math.hypot(nx, ny, nz);
+        normals.setXYZ(index, nx / normalLength, ny / normalLength, nz / normalLength);
+      }
+      coordinates.needsUpdate = true;
+      normals.needsUpdate = true;
+      return geometry;
+    }, material, position);
+  }
+
   function cylinder(parent: Group, material: Material, radius: number, height: number, position: Vector, segments = 14) {
     const key = `cylinder:${radius}:${height}:${segments}`;
     return place(parent, key, () => new CylinderGeometry(radius, radius, height, segments), material, position);
@@ -98,30 +242,37 @@ export function createAircraftInterior(): Group {
   function sidewall(parent: Group, min: number, max: number, windows: number[]) {
     const length = max - min;
     const middle = (max + min) / 2;
-    box(parent, materials.wall, [length, .48, .095], [middle, -.308, -.94], .032);
-    box(parent, materials.trim, [length, .43, .09], [middle, .545, -.88], .033).rotation.x = -.22;
-    box(parent, materials.seam, [length - .05, .023, .04], [middle, -.08, -.867], .01);
-    box(parent, materials.slate, [length - .05, .12, .035], [middle, -.486, -.875], .012);
-    box(parent, materials.light, [length - .13, .018, .022], [middle, -.481, -.855], .006);
+    const lowerAngle = liningAngle(floor);
+    const upperAngle = 2.10;
+    const continuousLimits = (): Span => [lowerAngle, upperAngle];
+    const closedPanel = (start: number, end: number) => liningStrip([start, end], continuousLimits, Math.max(3, Math.ceil((end - start) * 12)));
+    const strips: BufferGeometry[] = [];
 
     let start = min;
     for (const x of windows) {
-      const gap = x - .18 - start;
-      box(parent, materials.wall, [gap, .44, .08], [start + gap / 2, .126, -.945], .021);
-      box(parent, materials.seam, [.37, .428, .055], [x, .12, -.95], .12);
-      box(parent, materials.trim, [.308, .365, .039], [x, .128, -.917], .098);
-      box(parent, materials.slate, [.25, .312, .029], [x, .122, -.894], .082);
-      box(parent, materials.window, [.213, .273, .025], [x, .125, -.876], .074);
-      box(parent, materials.trim, [.234, .041, .021], [x, .247, -.857], .009);
-      box(parent, materials.satin, [.05, .012, .01], [x, .225, -.842], 0);
-      box(parent, materials.wall, [.42, .201, .044], [x, -.267, -.873], .022);
-      box(parent, materials.seam, [gap > .35 ? .019 : .012, .52, .013], [x - .229, -.232, -.855], 0);
-      for (const slat of [-.085, 0, .085]) {
-        box(parent, materials.seam, [.063, .017, .013], [x + slat, -.317, -.844], 0);
-      }
-      start = x + .18;
+      const span: Span = [x - windowWidth / 2, x + windowWidth / 2];
+      strips.push(closedPanel(start, span[0]));
+      strips.push(liningStrip(span, (column) => [lowerAngle, liningAngle(windowLimits(column - x)[0])], windowColumns));
+      strips.push(liningStrip(span, (column) => [liningAngle(windowLimits(column - x)[1]), upperAngle], windowColumns));
+      start = span[1];
+
+      const outer = windowContour(x, 1, -.001);
+      const chamfer = windowContour(x, .87, .036);
+      const gasket = windowContour(x, .71, .076);
+      const pane = windowContour(x, .66, .082);
+      place(parent, `window-chamfer:${x}`, () => windowReveal(outer, chamfer), materials.trim, [0, 0, 0]);
+      place(parent, `window-reveal:${x}`, () => windowReveal(chamfer, gasket), materials.seam, [0, 0, 0]);
+      place(parent, `window-gasket:${x}`, () => windowReveal(gasket, pane), materials.slate, [0, 0, 0]);
+      place(parent, `window-glass:${x}`, () => windowGlass(pane, x, .082), materials.window, [0, 0, 0]);
+      box(parent, materials.satin, [.046, .014, .014], [x, .275, liningDepth(.275) - .014], .004);
     }
-    box(parent, materials.wall, [max - start, .44, .08], [(max + start) / 2, .126, -.945], .021);
+    strips.push(closedPanel(start, max));
+    const lining = mergeGeometries(strips);
+    for (const strip of strips) strip.dispose();
+    if (lining) place(parent, `cabin-lining:${min}:${max}`, () => lining, materials.wall, [0, 0, 0]);
+    box(parent, materials.seam, [length - .06, .022, .031], [middle, -.107, liningDepth(-.107) + .008], .009);
+    box(parent, materials.slate, [length - .065, .08, .034], [middle, -.50, liningDepth(-.50) + .009], .012);
+    box(parent, materials.light, [length - .15, .016, .025], [middle, -.475, liningDepth(-.475) + .018], .006);
   }
 
   function overhead(parent: Group, min: number, max: number) {
@@ -129,24 +280,39 @@ export function createAircraftInterior(): Group {
     const length = max - min;
     const compartments = Math.round(length / 1.03);
     const pitch = length / compartments;
-    box(parent, materials.trim, [length, .095, 1.48], [middle, .883, 0], .028);
-    box(parent, materials.seam, [length - .11, .016, .33], [middle, .827, 0], .006);
-    box(parent, materials.light, [length - .18, .012, .14], [middle, .814, 0], .005);
+    box(parent, materials.seam, [length - .11, .025, .28], [middle, 1.044, 0], .01);
+    box(parent, materials.light, [length - .18, .013, .128], [middle, 1.023, 0], .006);
     for (const direction of [-1, 1]) {
+      box(parent, materials.seam, [length - .05, .136, .19], [middle, .731, direction * .81], .022);
       for (let index = 0; index < compartments; index += 1) {
         const x = min + (index + .5) * pitch;
-        box(parent, materials.wall, [pitch - .026, .181, .287], [x, .761, direction * .745], .044);
-        box(parent, materials.trim, [pitch - .059, .126, .037], [x, .746, direction * .593], .016)
-          .rotation.x = direction * .22;
-        box(parent, materials.seam, [.142, .02, .038], [x, .705, direction * .562], .006);
-        box(parent, materials.trim, [.50, .035, .218], [x, .644, direction * .686], .012);
+        const depth = pitch - .042;
+        place(parent, `bin-door:${depth}:${direction}`, () => {
+          const section = new Shape();
+          section.moveTo(-direction * .85, .692);
+          section.lineTo(-direction * .65, .674);
+          section.bezierCurveTo(-direction * .578, .667, -direction * .556, .707, -direction * .56, .774);
+          section.bezierCurveTo(-direction * .567, .832, -direction * .576, .861, -direction * .62, .894);
+          section.quadraticCurveTo(-direction * .692, .889, -direction * .778, .827);
+          section.quadraticCurveTo(-direction * .831, .782, -direction * .85, .692);
+          section.closePath();
+          const geometry = new ExtrudeGeometry(section, {
+            depth, curveSegments: 5, bevelEnabled: true, bevelSize: .008, bevelThickness: .009, bevelSegments: 2,
+          });
+          geometry.rotateY(Math.PI / 2);
+          geometry.translate(-depth / 2, 0, 0);
+          return geometry;
+        }, materials.trim, [x, 0, 0]);
+        box(parent, materials.seam, [.16, .024, .018], [x, .717, direction * .562], .005);
+        box(parent, materials.satin, [.091, .008, .012], [x, .717, direction * .549], .003);
+        box(parent, materials.trim, [.49, .031, .169], [x, .654, direction * .737], .011);
         for (const offset of [-.135, 0, .135]) {
-          cylinder(parent, materials.seam, .033, .016, [x + offset, .617, direction * .702], 10);
-          cylinder(parent, offset === 0 ? materials.light : materials.satin, .022, .01,
-            [x + offset, .606, direction * .702], 10);
+          cylinder(parent, materials.seam, .03, .015, [x + offset, .628, direction * .727], 10);
+          cylinder(parent, offset === 0 ? materials.light : materials.satin, .02, .01,
+            [x + offset, .618, direction * .727], 10);
         }
       }
-      box(parent, materials.light, [length - .1, .019, .036], [middle, .651, direction * .82], .007);
+      box(parent, materials.light, [length - .10, .016, .035], [middle, .658, direction * .819], .007);
     }
   }
 
@@ -162,24 +328,45 @@ export function createAircraftInterior(): Group {
       box(seat, materials.bracket, [.49, .031, .05], [-.018, floor + .026, side * .168], .008);
       box(seat, frame, [.09, .16, .055], [.139, floor + .089, side * .16], .014).rotation.z = -.14;
       box(seat, frame, [.10, .16, .055], [-.158, floor + .089, side * .16], .014).rotation.z = .14;
-      box(seat, frame, [.06, .151, .045], [.086, -.224, side * .255], .012);
-      box(seat, frame, [.391, .065, .058], [-.046, -.143, side * .255], .023);
-      box(seat, padding, [.257, .023, .051], [-.094, -.102, side * .255], .011);
+      place(seat, "armrest-support", () => {
+        const profile = new Shape();
+        profile.moveTo(.172, -.349);
+        profile.bezierCurveTo(.175, -.258, .176, -.204, .151, -.161);
+        profile.quadraticCurveTo(.12, -.134, .073, -.124);
+        profile.lineTo(-.233, -.116);
+        profile.quadraticCurveTo(-.265, -.115, -.267, -.139);
+        profile.quadraticCurveTo(-.268, -.157, -.237, -.166);
+        profile.lineTo(.006, -.183);
+        profile.bezierCurveTo(.076, -.191, .101, -.241, .094, -.345);
+        profile.quadraticCurveTo(.13, -.362, .172, -.349);
+        profile.closePath();
+        const depth = .048;
+        const geometry = new ExtrudeGeometry(profile, {
+          depth, curveSegments: 5, bevelEnabled: true, bevelThickness: .005, bevelSize: .005, bevelSegments: 2,
+        });
+        geometry.translate(0, 0, -depth / 2);
+        return geometry;
+      }, frame, [0, 0, side * .231]);
+      box(seat, padding, [.278, .025, .053], [-.104, -.111, side * .231], .011).rotation.z = -.015;
+      const pivot = cylinder(seat, materials.bracket, .031, .018, [.128, -.219, side * .254], 10);
+      pivot.rotation.x = Math.PI / 2;
     }
 
-    box(seat, frame, [.539, .097, .462], [-.024, -.385, 0], .041);
-    box(seat, padding, [.528, .105, .389], [-.061, -.328, 0], .047);
-    box(seat, insert, [.445, .036, .294], [-.078, -.275, 0], .017);
+    seatShell(seat, frame, [.525, .087, .435], [-.023, -.388, 0], .034, false);
+    seatShell(seat, padding, [.517, .106, .396], [-.064, -.331, 0], .045, false);
+    seatShell(seat, insert, [.435, .038, .302], [-.082, -.282, 0], .017, false);
     // The cabin faces negative x, so the positive-x backs describe the recline.
-    box(seat, frame, [.121, .696, .412], [.247, -.047, 0], .054).rotation.z = -.165;
-    box(seat, padding, [.116, .606, .37], [.161, -.065, 0], .054).rotation.z = -.165;
-    box(seat, insert, [.042, .455, .298], [.091, -.077, 0], .018).rotation.z = -.165;
-    box(seat, insert, [.141, .139, .308], [.182, .257, 0], .063).rotation.z = -.165;
+    seatShell(seat, frame, [.102, .674, .421], [.231, -.045, 0], .044, true).rotation.z = -.182;
+    seatShell(seat, padding, [.112, .604, .377], [.159, -.068, 0], .049, true).rotation.z = -.182;
+    seatShell(seat, insert, [.052, .48, .308], [.088, -.078, 0], .023, true).rotation.z = -.182;
+    seatShell(seat, insert, [.125, .114, .319], [.17, .241, 0], .049, true).rotation.z = -.182;
     for (const side of [-1, 1]) {
-      box(seat, padding, [.422, .046, .065], [-.061, -.26, side * .152], .021);
-      box(seat, padding, [.078, .443, .058], [.105, -.059, side * .126], .02).rotation.z = -.165;
-      box(seat, pilot ? materials.bracket : materials.fabricSeam, [.005, .355, .012], [.071, -.057, side * .148], 0)
-        .rotation.z = -.165;
+      seatShell(seat, padding, [.408, .049, .063], [-.065, -.267, side * .153], .021, false);
+      seatShell(seat, padding, [.079, .461, .061], [.099, -.066, side * .127], .022, true).rotation.z = -.182;
+      if (!pilot) {
+        seatShell(seat, materials.fabricSeam, [.012, .321, .014], [.063, -.067, side * .148], .004, true)
+          .rotation.z = -.182;
+      }
       box(seat, pilot ? materials.vinyl : materials.cushion, [.19, .018, .046], [-.054, -.227, side * .081], .007)
         .rotation.y = side * .68;
     }
@@ -187,9 +374,14 @@ export function createAircraftInterior(): Group {
     box(seat, pilot ? materials.caution : materials.slate, [.026, .012, .033], [-.018, -.215, .039], .002);
 
     if (pilot) return;
-    box(seat, materials.seam, [.024, .247, .32], [.299, -.054, 0], .014).rotation.z = -.165;
-    box(seat, materials.trim, [.029, .213, .283], [.312, -.061, 0], .011).rotation.z = -.165;
-    box(seat, materials.bracket, [.032, .028, .08], [.335, .054, 0], .007);
+    box(seat, materials.seam, [.024, .247, .32], [.279, -.054, 0], .014).rotation.z = -.182;
+    box(seat, materials.trim, [.029, .213, .283], [.293, -.061, 0], .011).rotation.z = -.182;
+    box(seat, materials.slate, [.019, .031, .061], [.314, .048, 0], .007).rotation.z = -.182;
+    box(seat, materials.bracket, [.023, .017, .053], [.329, .049, 0], .005).rotation.z = -.182;
+    for (const hinge of [-.103, .103]) {
+      const pin = cylinder(seat, materials.bracket, .018, .055, [.283, -.153, hinge], 10);
+      pin.rotation.x = Math.PI / 2;
+    }
     box(seat, materials.slate, [.033, .105, .309], [.299, -.223, 0], .011).rotation.z = -.165;
     box(seat, materials.fabricSeam, [.025, .013, .284], [.32, -.173, 0], .003);
     box(seat, materials.trim, [.016, .065, .183], [.318, -.201, -.024], .005).rotation.set(.04, 0, -.165);
@@ -299,7 +491,12 @@ export function createAircraftInterior(): Group {
 
   const cabin = new Group();
   cabin.name = "Passenger cabin";
-  deck(cabin, -5.19, 1.103, 2.137, materials.deck);
+  deck(cabin, -5.27, 1.103, 2.137, materials.deck);
+  // The entry sill meets the deck and the stair hinge without protruding through the closed skin.
+  box(cabin, materials.satin, [.715, .018, .171], [-4.955, floor + .011, 1.0435], .006);
+  for (const z of [1.08, 1.113]) {
+    box(cabin, materials.slate, [.655, .008, .017], [-4.955, floor + .024, z], .002);
+  }
   box(cabin, materials.runner, [6.18, .014, .51], [-2.09, floor + .002, .014], .005);
   for (const z of [-.234, .262]) {
     box(cabin, materials.carpetEdge, [6.13, .008, .023], [-2.09, floor + .011, z], .002);
@@ -308,10 +505,14 @@ export function createAircraftInterior(): Group {
   overhead(cabin, -5.04, .93);
   trimPartition(cabin, 1.04);
 
-  const rows = [-4.52, -3.45, -2.48, -1.56, -.642, .279];
+  const rows = [-3.45, -2.48, -1.56, -.642, .279];
+  const trackStart = -4.45;
+  const trackEnd = .81;
+  const trackLength = trackEnd - trackStart;
+  const trackCenter = (trackStart + trackEnd) / 2;
   for (const z of [-.78, -.449, .408, .747]) {
-    box(cabin, materials.satin, [5.82, .019, .045], [-2.1, floor + .01, z], .004);
-    box(cabin, materials.slate, [5.76, .011, .016], [-2.1, floor + .022, z], .002);
+    box(cabin, materials.satin, [trackLength, .019, .045], [trackCenter, floor + .01, z], .004);
+    box(cabin, materials.slate, [trackLength - .06, .011, .016], [trackCenter, floor + .022, z], .002);
     for (const x of rows) {
       box(cabin, materials.bracket, [.10, .015, .051], [x + .211, floor + .031, z], .004);
     }
@@ -341,40 +542,89 @@ export function createAircraftInterior(): Group {
     furniture.rotation.y = rotation;
     lounge.add(furniture);
 
+    box(furniture, materials.sofa, [width - .145, .086, .474], [0, -.452, -.017], .031);
     for (const side of [-1, 1]) {
       for (const edge of [-1, 1]) {
-        box(furniture, materials.wood, [.048, .067, .049], [side * (width / 2 - .082), floor + .035, edge * .241], .013);
+        const leg = place(furniture, "lounge-seat-leg", () => new CylinderGeometry(.022, .013, .086, 10),
+          materials.wood, [side * (width / 2 - .108), floor + .043, edge * .192]);
+        leg.rotation.set(edge * .13, 0, side * .16);
       }
-      box(furniture, materials.sofa, [.129, .334, .574], [side * (width / 2 - .064), -.345, 0], .06);
     }
 
-    box(furniture, materials.sofa, [width - .046, .186, .563], [0, -.41, 0], .068);
-    box(furniture, materials.sofa, [width - .038, .473, .158], [0, -.203, -.233], .073).rotation.x = -.13;
+    const side = width / 2 - .08;
+    seatShell(furniture, materials.sofa, [.576, .153, width - .04], [0, -.394, -.014], .054, false)
+      .rotation.y = Math.PI / 2;
+    place(furniture, `lounge-wrap:${width}`, () => {
+      const route = new CatmullRomCurve3([
+        new Vector3(-side, -.255, .221),
+        new Vector3(-side, -.241, .002),
+        new Vector3(-side + .047, -.176, -.207),
+        new Vector3(-side * .54, -.132, -.276),
+        new Vector3(0, -.125, -.288),
+        new Vector3(side * .54, -.132, -.276),
+        new Vector3(side - .047, -.176, -.207),
+        new Vector3(side, -.241, .002),
+        new Vector3(side, -.255, .221),
+      ]);
+      const rings = 50;
+      const samples = 16;
+      const positions: number[] = [];
+      const uv: number[] = [];
+      const indices: number[] = [];
+      for (let ring = 0; ring <= rings; ring += 1) {
+        const progress = ring / rings;
+        const point = route.getPointAt(progress);
+        const tangent = route.getTangentAt(progress);
+        const bearing = Math.hypot(tangent.x, tangent.z);
+        const cap = Math.sqrt(Math.min(1, Math.max(.001, progress * 16), Math.max(.001, (1 - progress) * 16)));
+        const backRise = Math.max(0, 1 - Math.abs(progress - .5) * 3.45);
+        for (let sample = 0; sample <= samples; sample += 1) {
+          const angle = sample / samples * Math.PI * 2;
+          const offset = .078 * cap * Math.cos(angle);
+          positions.push(point.x + offset * tangent.z / bearing,
+            point.y + Math.sin(angle) * cap * (.136 + .083 * backRise),
+            point.z - offset * tangent.x / bearing);
+          uv.push(progress, sample / samples);
+          if (ring < rings && sample < samples) {
+            const vertex = ring * (samples + 1) + sample;
+            const next = vertex + samples + 1;
+            indices.push(vertex, vertex + 1, next, vertex + 1, next + 1, next);
+          }
+        }
+      }
+      return createSurface(positions, uv, indices);
+    }, materials.sofa, [0, 0, 0]);
     const seats = double ? [-.235, .235] : [0];
     for (const offset of seats) {
       const padWidth = double ? .455 : width - .215;
-      box(furniture, materials.sofaInset, [padWidth, .107, .42], [offset, -.297, .043], .048);
-      box(furniture, materials.sofaInset, [padWidth, .336, .091], [offset, -.139, -.174], .043).rotation.x = -.13;
-      box(furniture, materials.slate, [padWidth - .075, .018, .025], [offset, -.274, .242], .007);
-      box(furniture, materials.slate, [padWidth - .087, .016, .015], [offset, -.085, -.121], .004);
+      seatShell(furniture, materials.sofaInset, [.426, .102, padWidth], [offset, -.299, .041], .045, false)
+        .rotation.y = Math.PI / 2;
+      seatShell(furniture, materials.sofaInset, [.119, .356, padWidth], [offset, -.129, -.164], .047, true)
+        .rotation.set(-.106, Math.PI / 2, 0);
     }
-    box(furniture, materials.pillow, [.192, .216, .102], [width / 2 - .193, -.178, -.084], .043)
-      .rotation.set(-.2, 0, -.16);
+    seatShell(furniture, materials.pillow, [.102, .21, .19], [width / 2 - .193, -.179, -.08], .043, true)
+      .rotation.set(-.18, Math.PI / 2 - .12, -.09);
     if (double) {
-      box(furniture, materials.fabricSeam, [.201, .163, .091], [-width / 2 + .204, -.183, -.083], .039)
-        .rotation.set(-.22, 0, .14);
+      seatShell(furniture, materials.fabricSeam, [.091, .166, .199], [-width / 2 + .204, -.183, -.078], .039, true)
+        .rotation.set(-.21, Math.PI / 2 + .12, .12);
     }
   }
 
   loungeSeat(1.72, .52, .698, Math.PI / 2);
   loungeSeat(4.19, -.626, 1.21, 0, true);
   loungeSeat(3.15, -.528, .68, .37);
-  const tableApron = cylinder(lounge, materials.wood, .428, .045, [2.77, -.321, .283], 22);
+  const tableApron = cylinder(lounge, materials.wood, .365, .038, [2.77, -.309, .283], 26);
   tableApron.scale.z = .73;
-  const table = cylinder(lounge, materials.woodLight, .423, .039, [2.77, -.279, .283], 22);
+  const table = place(lounge, "lounge-table-top", () => new LatheGeometry([
+    new Vector2(0, -.02), new Vector2(.377, -.02), new Vector2(.4, -.016),
+    new Vector2(.419, -.009), new Vector2(.426, .006), new Vector2(.421, .016),
+    new Vector2(.408, .021), new Vector2(0, .021),
+  ], 36), materials.woodLight, [2.77, -.28, .283]);
   table.scale.z = .73;
   for (const [x, z] of [[2.53, .269], [2.99, .184], [2.94, .427]]) {
-    box(lounge, materials.wood, [.059, .25, .06], [x, -.425, z], .019);
+    const leg = place(lounge, "lounge-table-leg", () => new CylinderGeometry(.026, .016, .247, 12),
+      materials.wood, [x, -.435, z]);
+    leg.rotation.set((z - .283) * .75, 0, -(x - 2.77) * .65);
   }
   box(lounge, materials.slate, [.199, .017, .137], [2.786, -.25, .24], .004).rotation.y = -.17;
   box(lounge, materials.trim, [.184, .012, .116], [2.792, -.237, .243], .003).rotation.y = -.17;

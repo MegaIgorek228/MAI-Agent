@@ -31,7 +31,7 @@ type CameraFlight = {
 };
 
 const destinations: Record<AircraftFocus, { x: number; y: number; z: number; angle: number }> = {
-  overview: { x: 0, y: .6, z: 0, angle: -.11 },
+  overview: { x: 0, y: -.38, z: 0, angle: -.24 },
   cockpit: { x: -6.6, y: .14, z: .18, angle: .22 },
   seat: { x: -3.45, y: .03, z: .16, angle: .06 },
   lounge: { x: 2.7, y: .07, z: .23, angle: -.09 },
@@ -43,11 +43,12 @@ const bayBands: [AircraftBay, number, number][] = [
   ["lounge", .95, 5.45],
 ];
 
-function disposeModel(root: THREE.Object3D) {
+function disposeScene(root: THREE.Object3D) {
   const geometries = new Set<THREE.BufferGeometry>();
   const materials = new Set<THREE.Material>();
   const textures = new Set<THREE.Texture>();
   root.traverse((object) => {
+    if (object instanceof THREE.DirectionalLight && object.castShadow) object.shadow.dispose();
     if (!(object instanceof THREE.Mesh || object instanceof THREE.Line || object instanceof THREE.Points)) return;
     geometries.add(object.geometry);
     for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
@@ -73,12 +74,48 @@ function makeStudioMap(renderer: THREE.WebGLRenderer) {
   }
 }
 
-function addLighting(scene: THREE.Scene) {
-  const key = new THREE.DirectionalLight(0xfff5e9, 2.35);
-  key.position.set(-9, 13, 9);
-  const fill = new THREE.DirectionalLight(0xdde6f7, .45);
-  fill.position.set(8, 4, -11);
-  scene.add(key, fill, new THREE.HemisphereLight(0xf8f8f3, 0x77746e, .54));
+function createStudio(renderer: THREE.WebGLRenderer, scene: THREE.Scene, airplane: THREE.Group) {
+  const key = new THREE.DirectionalLight(0xfff4e5, 1.9);
+  key.position.set(-8, 13, 6);
+  key.castShadow = true;
+  key.shadow.mapSize.setScalar(window.matchMedia("(pointer: coarse)").matches ? 1024 : 1536);
+  key.shadow.camera.left = -13;
+  key.shadow.camera.right = 13;
+  key.shadow.camera.top = 9;
+  key.shadow.camera.bottom = -9;
+  key.shadow.camera.near = .5;
+  key.shadow.camera.far = 34;
+  key.shadow.camera.updateProjectionMatrix();
+  key.shadow.bias = -.00015;
+  key.shadow.normalBias = .018;
+  key.shadow.radius = 2.8;
+
+  const rim = new THREE.DirectionalLight(0xdfeaff, .65);
+  rim.position.set(7, 5, -9);
+  const frontFill = new THREE.DirectionalLight(0xfff5e8, .95);
+  frontFill.position.set(-1, 1.6, 11);
+  scene.add(key, key.target, rim, frontFill, new THREE.HemisphereLight(0xf2f3ef, 0x807d76, .48));
+
+  airplane.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    object.castShadow = materials.some((material) => !material.transparent);
+    object.receiveShadow = true;
+  });
+
+  const ground = new THREE.Mesh(
+    new THREE.PlaneGeometry(46, 29),
+    new THREE.ShadowMaterial({ color: 0x414951, opacity: .075, depthWrite: false }),
+  );
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = -3.008;
+  ground.receiveShadow = true;
+  scene.add(ground);
+
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true;
 }
 
 function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbacks: ViewerCallbacks) {
@@ -90,19 +127,21 @@ function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbac
   let environment: THREE.WebGLRenderTarget | undefined;
   let body: THREE.Group;
   let panels: THREE.Group;
+  let cutaway: THREE.Group;
   let interior: THREE.Group;
   try {
-    ({ body, panels } = createAircraftExterior());
-    airplane.add(body, panels);
+    ({ body, panels, cutaway } = createAircraftExterior());
+    airplane.add(body, panels, cutaway);
     interior = createAircraftInterior();
     airplane.add(interior);
     panels.visible = false;
-    addLighting(scene);
+    createStudio(renderer, scene, airplane);
     environment = makeStudioMap(renderer);
     scene.environment = environment.texture;
-    scene.environmentIntensity = .48;
+    scene.environmentIntensity = .55;
+    scene.environmentRotation.y = -.32;
   } catch (error) {
-    disposeModel(airplane);
+    disposeScene(scene);
     environment?.dispose();
     renderer.dispose();
     renderer.forceContextLoss();
@@ -111,7 +150,7 @@ function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbac
 
   renderer.setClearColor(0x000000, 0);
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.01;
+  renderer.toneMappingExposure = .9;
   const canvas = renderer.domElement;
   canvas.setAttribute("data-aircraft-canvas", "");
   canvas.setAttribute("aria-label", "Трёхмерная модель самолёта. Стрелки вращают, плюс и минус меняют масштаб.");
@@ -193,6 +232,8 @@ function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbac
 
   function setExterior(exterior: boolean) {
     panels.visible = exterior;
+    cutaway.visible = !exterior;
+    renderer.shadowMap.needsUpdate = true;
     callbacks.onExteriorChange(exterior);
     requestFrame();
   }
@@ -200,7 +241,7 @@ function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbac
   function distanceFor(next: AircraftFocus) {
     const halfWidthAtOneUnit = Math.tan(THREE.MathUtils.degToRad(camera.fov * .5)) * camera.aspect;
     return next === "overview"
-      ? THREE.MathUtils.clamp(12.2 / halfWidthAtOneUnit, 14.2, 43)
+      ? THREE.MathUtils.clamp(13.05 / halfWidthAtOneUnit, 15.8, 43)
       : THREE.MathUtils.clamp(4.8 / halfWidthAtOneUnit, 3.15, 8.4);
   }
 
@@ -213,7 +254,7 @@ function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbac
 
     const view = destinations[next];
     const target = new THREE.Vector3(view.x, view.y, view.z);
-    const toOrbit = new THREE.Spherical(distanceFor(next), next === "overview" ? 1.36 : 1.42, view.angle);
+    const toOrbit = new THREE.Spherical(distanceFor(next), next === "overview" ? 1.3 : 1.42, view.angle);
 
     if (!animate || motion.matches) {
       flight = null;
@@ -368,7 +409,7 @@ function createViewer(host: HTMLDivElement, initialFocus: AircraftFocus, callbac
       canvas.removeEventListener("pointermove", onPointerMove);
       canvas.removeEventListener("pointerup", onPointerUp);
       canvas.removeEventListener("pointercancel", onPointerCancel);
-      disposeModel(airplane);
+      disposeScene(scene);
       environment?.dispose();
       renderer.dispose();
       if (!contextLost) renderer.forceContextLoss();
