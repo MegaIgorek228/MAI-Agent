@@ -47,6 +47,8 @@ def test_fixture_shape_is_stable(client):
     # Every person in the reference registry is unique by full name + date of birth.
     identities = {(item["full_name"], item["date_of_birth"]) for item in data["candidates"]}
     assert len(identities) == 10
+    # Each full name carries a patronymic: surname, first name, patronymic.
+    assert all(len(item["full_name"].split()) == 3 for item in data["candidates"])
 
 
 def test_loaders_are_idempotent_and_reject_conflicts(client):
@@ -74,13 +76,13 @@ def test_loaders_are_idempotent_and_reject_conflicts(client):
         from app.models import SyntheticEgeCandidate
 
         person = db.get(SyntheticEgeCandidate, "SYN-1001")
-        assert person.full_name == "Алексей Иванов"
+        assert person.full_name == "Алексей Иванович Иванов"
 
 
 def test_unique_match_found_case_and_whitespace_insensitive(client):
     seed_registry(client)
     headers = auth_headers(client)
-    response = search(client, headers, "  алексей    иВАНОВ ", "2008-03-14")
+    response = search(client, headers, "  алексей    иВАНОВИЧ   иВАНОВ ", "2008-03-14")
     assert response.status_code == 200
     body = response.json()
     assert body["match_count"] == 1
@@ -96,7 +98,7 @@ def test_unique_match_found_case_and_whitespace_insensitive(client):
 def test_no_match_is_reported(client):
     seed_registry(client)
     headers = auth_headers(client)
-    body = search(client, headers, "Алексей Иванов", "2008-03-15").json()
+    body = search(client, headers, "Алексей Иванович Иванов", "2008-03-15").json()
     assert body["match_count"] == 0
     assert body["matches"] == []
     assert body["ambiguous"] is False

@@ -1,15 +1,15 @@
 {
   "candidates": [
-    {"candidate_id": "SYN-1001", "full_name": "Алексей Иванов", "date_of_birth": "2008-03-14"},
-    {"candidate_id": "SYN-1002", "full_name": "Мария Петрова", "date_of_birth": "2008-07-22"},
-    {"candidate_id": "SYN-1003", "full_name": "Дмитрий Смирнов", "date_of_birth": "2008-11-02"},
-    {"candidate_id": "SYN-1004", "full_name": "Анна Васильева", "date_of_birth": "2008-01-19"},
-    {"candidate_id": "SYN-1005", "full_name": "Игорь Сидоров", "date_of_birth": "2008-09-30"},
-    {"candidate_id": "SYN-1006", "full_name": "Ольга Кузнецова", "date_of_birth": "2008-05-08"},
-    {"candidate_id": "SYN-1007", "full_name": "Павел Соколов", "date_of_birth": "2008-12-25"},
-    {"candidate_id": "SYN-1008", "full_name": "Екатерина Морозова", "date_of_birth": "2008-04-17"},
-    {"candidate_id": "SYN-1009", "full_name": "Светлана Иванова", "date_of_birth": "2008-06-12"},
-    {"candidate_id": "SYN-1010", "full_name": "Евгений Волков", "date_of_birth": "2008-10-03"}
+    {"candidate_id": "SYN-1001", "full_name": "Алексей Иванович Иванов", "date_of_birth": "2008-03-14"},
+    {"candidate_id": "SYN-1002", "full_name": "Мария Петровна Петрова", "date_of_birth": "2008-07-22"},
+    {"candidate_id": "SYN-1003", "full_name": "Дмитрий Сергеевич Смирнов", "date_of_birth": "2008-11-02"},
+    {"candidate_id": "SYN-1004", "full_name": "Анна Александровна Васильева", "date_of_birth": "2008-01-19"},
+    {"candidate_id": "SYN-1005", "full_name": "Игорь Петрович Сидоров", "date_of_birth": "2008-09-30"},
+    {"candidate_id": "SYN-1006", "full_name": "Ольга Николаевна Кузнецова", "date_of_birth": "2008-05-08"},
+    {"candidate_id": "SYN-1007", "full_name": "Павел Андреевич Соколов", "date_of_birth": "2008-12-25"},
+    {"candidate_id": "SYN-1008", "full_name": "Екатерина Дмитриевна Морозова", "date_of_birth": "2008-04-17"},
+    {"candidate_id": "SYN-1009", "full_name": "Светлана Викторовна Иванова", "date_of_birth": "2008-06-12"},
+    {"candidate_id": "SYN-1010", "full_name": "Евгений Олегович Волков", "date_of_birth": "2008-10-03"}
   ],
   "results": [
     {"candidate_id": "SYN-1001", "subject": "Русский язык", "year": 2026, "score": 88},

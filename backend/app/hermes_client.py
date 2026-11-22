@@ -241,39 +241,80 @@ class HermesClientManager:
             if entry.restore_history:
                 text = await asyncio.to_thread(_with_conversation_history, user_id, app_session_id, text)
                 entry.restore_history = False
-            prompt_blocks: list[Any] = [TextContentBlock(type="text", text=text)]
-            if content_blocks is not None:
-                prompt_blocks.append(
-                    ImageContentBlock(
-                        type="image",
-                        data=content_blocks["data"],
-                        mime_type=content_blocks["mime_type"],
-                    )
-                )
             try:
-                response = await asyncio.wait_for(
-                    entry.connection.prompt(session_id=entry.session_id, prompt=prompt_blocks),
-                    timeout=get_settings().acp_prompt_timeout_seconds,
-                )
-            except asyncio.CancelledError:
-                await self._close_unlocked(app_session_id)
-                raise
-            except Exception as exc:
-                await self._close_unlocked(app_session_id)
-                detail = (
-                    "Hermes ACP prompt timed out"
-                    if isinstance(exc, TimeoutError) else "Hermes ACP prompt failed"
-                )
-                raise HermesUnavailableError(detail) from exc
+                response = await self._run_prompt(entry, app_session_id, text, content_blocks)
             finally:
                 entry.last_used = monotonic()
             if response.stop_reason == "cancelled":
                 raise HermesUnavailableError("Hermes ACP prompt was cancelled")
+            response_text = "".join(entry.callbacks.messages).strip()
+            # Stale-session recovery. The ACP agent accepts any stored session
+            # UUID at load time, so after a process restart a saved session can
+            # load "successfully" while holding no state; the prompt then ends
+            # with stop_reason=refusal and zero chunks. A genuine refusal
+            # always carries text, so an EMPTY refusal marks a stale session:
+            # open a fresh session (history re-injected) and retry once.
+            if (
+                not response_text
+                and response.stop_reason == "refusal"
+                and hermes_session_id is not None
+            ):
+                logger.info(
+                    "Hermes session %s looked stale (empty refusal); retrying with a fresh session",
+                    hermes_session_id,
+                )
+                await self._close_unlocked(app_session_id)
+                entry = await self._start(user_id, app_session_id, None)
+                entry.restore_history = True
+                self._processes[app_session_id] = entry
+                entry.callbacks.messages.clear()
+                retry_text = await asyncio.to_thread(_with_conversation_history, user_id, app_session_id, text)
+                try:
+                    response = await self._run_prompt(entry, app_session_id, retry_text, content_blocks)
+                finally:
+                    entry.last_used = monotonic()
+                if response.stop_reason == "cancelled":
+                    raise HermesUnavailableError("Hermes ACP prompt was cancelled")
+                if response.stop_reason not in ("end_turn", "max_tokens"):
+                    logger.warning("Hermes ACP prompt stop_reason=%s", response.stop_reason)
+                return "".join(entry.callbacks.messages).strip(), entry.session_id
             if response.stop_reason not in ("end_turn", "max_tokens"):
                 logger.warning("Hermes ACP prompt stop_reason=%s", response.stop_reason)
             # An empty turn can still have invoked tools. Let the caller show
             # the failure instead of automatically repeating the action.
-            return "".join(entry.callbacks.messages).strip(), entry.session_id
+            return response_text, entry.session_id
+
+    async def _run_prompt(
+        self,
+        entry: HermesProcess,
+        app_session_id: int,
+        text: str,
+        content_blocks: dict[str, str] | None,
+    ) -> Any:
+        prompt_blocks: list[Any] = [TextContentBlock(type="text", text=text)]
+        if content_blocks is not None:
+            prompt_blocks.append(
+                ImageContentBlock(
+                    type="image",
+                    data=content_blocks["data"],
+                    mime_type=content_blocks["mime_type"],
+                )
+            )
+        try:
+            return await asyncio.wait_for(
+                entry.connection.prompt(session_id=entry.session_id, prompt=prompt_blocks),
+                timeout=get_settings().acp_prompt_timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            await self._close_unlocked(app_session_id)
+            raise
+        except Exception as exc:
+            await self._close_unlocked(app_session_id)
+            detail = (
+                "Hermes ACP prompt timed out"
+                if isinstance(exc, TimeoutError) else "Hermes ACP prompt failed"
+            )
+            raise HermesUnavailableError(detail) from exc
 
     async def _close_unlocked(self, app_session_id: int) -> None:
         entry = self._processes.pop(app_session_id, None)
