@@ -347,6 +347,30 @@ legend { padding-inline: .35rem; font-weight: 620; }
 .app-content { min-width: 0; padding: clamp(.8rem, 2.4vw, 1.85rem) clamp(.72rem, 2.8vw, 2.1rem) 2.5rem; }
 .workspace-content { display: grid; min-width: 0; gap: clamp(1rem, 2.4vw, 1.8rem); }
 .workspace-content:focus { outline: none; }
+
+html:has(.app-shell--agent),
+body:has(.app-shell--agent) { overflow: hidden; }
+body:has(.app-shell--agent),
+#root:has(.app-shell--agent) { min-height: 0; }
+
+.app-shell--agent {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: min(100dvh, var(--chat-viewport-height, 100dvh));
+  min-height: 0;
+  background: var(--surface);
+}
+.app-shell--agent .app-column,
+.app-shell--agent .app-content,
+.workspace-content--agent {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+.app-shell--agent .app-column { width: 100%; }
+.app-shell--agent .app-content { padding: 0; }
+.app-shell--agent .global-error { margin: .55rem .8rem 0; }
 .session-restore {
   display: grid;
   gap: 1rem;

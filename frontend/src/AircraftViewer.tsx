@@ -32,7 +32,7 @@ type CameraFlight = {
 
 const destinations: Record<AircraftFocus, { x: number; y: number; z: number; angle: number }> = {
   overview: { x: 0, y: .6, z: 0, angle: -.11 },
-  cockpit: { x: -6.6, y: .14, z: .18, angle: -.12 },
+  cockpit: { x: -6.6, y: .14, z: .18, angle: .22 },
   seat: { x: -3.45, y: .03, z: .16, angle: .06 },
   lounge: { x: 2.7, y: .07, z: .23, angle: -.09 },
 };

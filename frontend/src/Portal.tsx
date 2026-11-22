@@ -151,6 +151,8 @@ type WorkspaceProps = {
 
 export function Workspace({ user, profile, view, error, onNavigate, onLogout, children }: WorkspaceProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const chat = view === "agent";
+  const shell = useRef<HTMLDivElement>(null);
   const menuToggle = useRef<HTMLButtonElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const previousView = useRef(view);
@@ -160,6 +162,23 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
       content.current?.focus({ preventScroll: true });
     }
   }, [view]);
+
+  useEffect(() => {
+    const element = shell.current;
+    const viewport = window.visualViewport;
+    if (!chat || !element || !viewport) return;
+
+    const fitChat = () => {
+      if (viewport.scale === 1) element.style.setProperty("--chat-viewport-height", `${viewport.height}px`);
+      else element.style.removeProperty("--chat-viewport-height");
+    };
+    fitChat();
+    viewport.addEventListener("resize", fitChat);
+    return () => {
+      viewport.removeEventListener("resize", fitChat);
+      element.style.removeProperty("--chat-viewport-height");
+    };
+  }, [chat]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -186,7 +205,7 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
   };
 
   return (
-    <div className="app-shell">
+    <div className={chat ? "app-shell app-shell--agent" : "app-shell"} ref={shell}>
       <header className="app-header">
         <div className="app-masthead">
           <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
@@ -226,8 +245,9 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
       <div className="app-column">
         <main className="app-content">
           {error && <p className="error global-error" role="alert">{error}</p>}
-          <AircraftMap user={user} view={view} onNavigate={navigate} />
-          <div className="workspace-content" ref={content} tabIndex={-1} role="region" aria-label={viewTitles[view]}>
+          {!chat && <AircraftMap user={user} view={view} onNavigate={navigate} />}
+          <div className={chat ? "workspace-content workspace-content--agent" : "workspace-content"}
+            ref={content} tabIndex={-1} role="region" aria-label={viewTitles[view]}>
             {children}
           </div>
         </main>

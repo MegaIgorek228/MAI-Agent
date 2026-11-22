@@ -1,4 +1,4 @@
-import { type ChangeEvent, type FormEvent, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { type ChatMessage, type ChatSession, documentFileUrl } from "./api";
 import { Icon } from "./Icon";
@@ -78,127 +78,142 @@ export function AssistantWorkspace({
   onRemoveAttachment
 }: AssistantWorkspaceProps) {
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(false);
+  const historyToggle = useRef<HTMLButtonElement>(null);
   const log = useRef<HTMLDivElement>(null);
   const composer = useRef<HTMLTextAreaElement>(null);
+  const followTail = useRef(true);
+  const previousSession = useRef(sessionId);
+  const hasMessages = messages.length > 0;
   const waitingForReply = pending && messages.at(-1)?.role === "user";
 
+  const scrollToTail = () => {
+    if (log.current && followTail.current) log.current.scrollTop = log.current.scrollHeight;
+  };
+
+  useLayoutEffect(() => {
+    if (!hasMessages || previousSession.current !== sessionId || waitingForReply) followTail.current = true;
+    previousSession.current = sessionId;
+    scrollToTail();
+  }, [sessionId, hasMessages, messages, waitingForReply]);
+
   useEffect(() => {
-    if (log.current) log.current.scrollTop = log.current.scrollHeight;
-  }, [sessionId, messages, waitingForReply]);
+    if (!log.current) return;
+    const observer = new ResizeObserver(scrollToTail);
+    observer.observe(log.current);
+    return () => observer.disconnect();
+  }, [hasMessages]);
+
+  const closeHistory = () => {
+    setMobileHistoryOpen(false);
+    historyToggle.current?.focus({ preventScroll: true });
+  };
 
   return (
     <section className="assistant-workspace" aria-labelledby="assistant-title">
-      <h1 id="assistant-title">Чат с помощником</h1>
-      <div className="assistant-layout">
-        <aside className="assistant-history" aria-label="История диалогов">
-          <div className="assistant-history-mobile">
-            <button
-              aria-controls="assistant-history-content"
-              aria-expanded={mobileHistoryOpen}
-              className="assistant-history-toggle"
-              onClick={() => setMobileHistoryOpen((open) => !open)}
-              type="button"
-            >
-              <Icon name="clock" />
-              История диалогов
-              <Icon name="chevron-down" />
-            </button>
-            <button
-              aria-label="Начать диалог"
-              className="assistant-icon-button"
-              disabled={pending}
-              onClick={() => {
-                onStartSession();
-                setMobileHistoryOpen(false);
-              }}
-              title="Начать диалог"
-              type="button"
-            ><Icon name="plus" /></button>
-          </div>
-
-          <div
-            className={mobileHistoryOpen ? "assistant-history-content is-open" : "assistant-history-content"}
-            id="assistant-history-content"
-            aria-busy={historyLoading}
+      <aside className="assistant-history" aria-label="История диалогов" onKeyDown={(event) => {
+        if (mobileHistoryOpen && event.key === "Escape") closeHistory();
+      }}>
+        <div className="assistant-history-toolbar">
+          <button
+            aria-controls="assistant-history-content"
+            aria-expanded={mobileHistoryOpen}
+            className="assistant-history-toggle"
+            onClick={() => setMobileHistoryOpen((open) => !open)}
+            ref={historyToggle}
+            type="button"
           >
-            <div className="assistant-history-heading">
-              <h2>История диалогов</h2>
-              <button
-                aria-label="Обновить список диалогов"
-                className="assistant-icon-button"
-                disabled={historyLoading || pending}
-                onClick={onRefreshHistory}
-                title="Обновить список диалогов"
-                type="button"
-              ><Icon name="refresh" /></button>
-            </div>
+            <Icon name="panel-left" /> История диалогов <Icon name="chevron-down" />
+          </button>
+          <button
+            className="assistant-new-chat"
+            disabled={pending}
+            onClick={() => {
+              onStartSession();
+              setMobileHistoryOpen(false);
+            }}
+            type="button"
+          ><Icon name="plus" /> Начать диалог</button>
+        </div>
+
+        <div
+          className={mobileHistoryOpen ? "assistant-history-content is-open" : "assistant-history-content"}
+          id="assistant-history-content"
+          aria-busy={historyLoading}
+        >
+          <div className="assistant-history-heading">
+            <h2>История диалогов</h2>
             <button
-              className="assistant-new-chat"
-              disabled={pending}
-              onClick={() => {
-                onStartSession();
-                setMobileHistoryOpen(false);
-              }}
+              aria-label="Обновить список диалогов"
+              className="assistant-icon-button"
+              disabled={historyLoading || pending}
+              onClick={onRefreshHistory}
+              title="Обновить список диалогов"
               type="button"
-            ><Icon name="plus" /> Начать диалог</button>
-
-            {!sessions.length && (
-              <p className="assistant-history-empty" role={historyLoading ? "status" : undefined}>
-                {historyLoading ? "Загружаем историю…" : "Начатые диалоги появятся здесь."}
-              </p>
-            )}
-            {!!sessions.length && (
-              <ul className="assistant-session-list">
-                {sessions.map((session) => {
-                  const date = formatDate(session.created_at, sessionDateFormat);
-                  return (
-                    <li key={session.id}>
-                      <button
-                        aria-current={session.id === sessionId ? "true" : undefined}
-                        className="assistant-session"
-                        disabled={pending}
-                        onClick={() => {
-                          onOpenSession(session.id);
-                          setMobileHistoryOpen(false);
-                        }}
-                        type="button"
-                      >
-                        <span className="assistant-session-icon">
-                          <Icon name={session.channel === "telegram" ? "telegram" : "chat"} />
-                        </span>
-                        <span>
-                          <strong>Диалог №{session.id}</strong>
-                          <small>
-                            {session.channel === "telegram" ? "Telegram" : "Веб"}
-                            {date && <><span aria-hidden="true"> · </span><time dateTime={session.created_at}>{date}</time></>}
-                          </small>
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            ><Icon name="refresh" /></button>
           </div>
-        </aside>
+          {!sessions.length && (
+            <p className="assistant-history-empty" role={historyLoading ? "status" : undefined}>
+              {historyLoading ? "Загружаем историю…" : "Начатые диалоги появятся здесь."}
+            </p>
+          )}
+          {!!sessions.length && (
+            <ul className="assistant-session-list">
+              {sessions.map((session) => {
+                const date = formatDate(session.created_at, sessionDateFormat);
+                return (
+                  <li key={session.id}>
+                    <button
+                      aria-current={session.id === sessionId ? "true" : undefined}
+                      className="assistant-session"
+                      disabled={pending}
+                      onClick={() => {
+                        onOpenSession(session.id);
+                        if (mobileHistoryOpen) closeHistory();
+                      }}
+                      type="button"
+                    >
+                      <Icon name={session.channel === "telegram" ? "telegram" : "chat"} />
+                      <span>
+                        <strong>Диалог №{session.id}</strong>
+                        <small>
+                          {session.channel === "telegram" ? "Telegram" : "Веб"}
+                          {date && <><span aria-hidden="true"> · </span><time dateTime={session.created_at}>{date}</time></>}
+                        </small>
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </aside>
 
-        <div className="assistant-panel">
-          <header className="assistant-panel-header">
-            <span className="assistant-avatar assistant-avatar-header"><Icon name="spark" /></span>
-            <div>
-              <h2>Помощник МАИ</h2>
-              <p>{sessionId ? `Диалог №${sessionId}` : "Новый диалог"}</p>
-            </div>
-          </header>
+      <div className="assistant-panel">
+        <header className="assistant-panel-header">
+          <div className="assistant-column">
+            <h1 id="assistant-title">Чат с помощником</h1>
+            {sessionId && <p>Диалог №{sessionId}</p>}
+          </div>
+        </header>
 
-          {messages.length > 0 ? (
-            <div ref={log} className="assistant-log" role="log" aria-label="Сообщения диалога" tabIndex={0}>
+        {hasMessages ? (
+          <div
+            ref={log}
+            className="assistant-log"
+            role="log"
+            aria-label="Сообщения диалога"
+            onScroll={({ currentTarget }) => {
+              followTail.current = currentTarget.scrollHeight - currentTarget.scrollTop - currentTarget.clientHeight < 80;
+            }}
+            tabIndex={0}
+          >
+            <div className="assistant-column assistant-thread">
               {messages.map((message, index) => {
                 const isUser = message.role === "user";
                 const time = formatDate(message.created_at, messageTimeFormat);
                 return (
                   <article className={isUser ? "assistant-message from-user" : "assistant-message"} key={index}>
-                    <span className="assistant-avatar" aria-hidden="true"><Icon name={isUser ? "user" : "spark"} /></span>
                     <div className="assistant-message-content">
                       <header>
                         <strong>{isUser ? "Вы" : "Помощник МАИ"}</strong>
@@ -210,6 +225,7 @@ export function AssistantWorkspace({
                             alt={message.image_filename || "Прикреплённое изображение"}
                             className="assistant-message-image"
                             loading="lazy"
+                            onLoad={scrollToTail}
                             src={documentFileUrl(token, message.image_document_id)}
                           />
                         )}
@@ -226,13 +242,12 @@ export function AssistantWorkspace({
                 </p>
               )}
             </div>
-          ) : (
-            <div className="assistant-welcome">
-              <div className="assistant-welcome-copy">
-                <span className="assistant-welcome-mark"><Icon name="spark" /></span>
-                <h2>Чем помочь?</h2>
-                <p>Задайте вопрос о поступлении в МАИ.</p>
-              </div>
+          </div>
+        ) : (
+          <div className="assistant-welcome">
+            <div className="assistant-column assistant-welcome-content">
+              <h2>Чем помочь?</h2>
+              <p>Задайте вопрос о поступлении в МАИ.</p>
               <div className="assistant-suggestions" aria-label="Примеры вопросов">
                 {suggestions.map(({ icon, text }) => (
                   <button
@@ -241,7 +256,7 @@ export function AssistantWorkspace({
                     key={text}
                     onClick={() => {
                       onInputChange(text);
-                      composer.current?.focus();
+                      composer.current?.focus({ preventScroll: true });
                     }}
                     type="button"
                   >
@@ -252,10 +267,15 @@ export function AssistantWorkspace({
                 ))}
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          <div className="assistant-composer-area">
-            <form className="assistant-composer" onSubmit={onSend}>
+        <div className="assistant-composer-area">
+          <div className="assistant-column">
+            <form className="assistant-composer" onSubmit={(event) => {
+              followTail.current = true;
+              onSend(event);
+            }}>
               {attachment && (
                 <div className="assistant-attachment">
                   <img alt="" src={attachment.previewUrl} />
@@ -270,6 +290,23 @@ export function AssistantWorkspace({
                   ><Icon name="x" /></button>
                 </div>
               )}
+              <label className="assistant-sr-only" htmlFor="assistant-message">Сообщение</label>
+              <textarea
+                aria-describedby="assistant-composer-hint"
+                disabled={pending}
+                id="assistant-message"
+                onChange={(event) => onInputChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    if (input.trim() || attachment) event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                placeholder="Напишите сообщение…"
+                ref={composer}
+                rows={2}
+                value={input}
+              />
               <div className="assistant-composer-row">
                 <label className="assistant-attach" title="Прикрепить изображение">
                   <Icon name="paperclip" />
@@ -282,30 +319,13 @@ export function AssistantWorkspace({
                     type="file"
                   />
                 </label>
-                <label className="assistant-sr-only" htmlFor="assistant-message">Сообщение</label>
-                <textarea
-                  aria-describedby="assistant-composer-hint"
-                  disabled={pending}
-                  id="assistant-message"
-                  onChange={(event) => onInputChange(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                      event.preventDefault();
-                      if (input.trim() || attachment) event.currentTarget.form?.requestSubmit();
-                    }
-                  }}
-                  placeholder="Напишите сообщение…"
-                  ref={composer}
-                  rows={2}
-                  value={input}
-                />
                 <button
                   aria-label="Отправить"
                   className="assistant-send"
                   disabled={pending || (!input.trim() && !attachment)}
                   title="Отправить"
                   type="submit"
-                ><Icon name="arrow-up" /></button>
+                ><Icon name="arrow-up" /> <span>Отправить</span></button>
               </div>
             </form>
             {pending && !waitingForReply && <p className="assistant-composer-status" role="status">Выполняем запрос…</p>}

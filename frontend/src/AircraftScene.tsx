@@ -25,7 +25,13 @@ export function AircraftScene({ focus, fallback, onSelect }: AircraftSceneProps)
 
   return (
     <div className="aircraft-scene" data-aircraft-status={status}>
-      {status !== "ready" && fallback}
+      {status === "loading" && (
+        <div className="aircraft-scene__loading" role="status">
+          <span aria-hidden="true" />
+          Загружаем 3D-модель
+        </div>
+      )}
+      {status === "unavailable" && fallback}
       {status !== "unavailable" && (
         <div className="aircraft-scene__canvas" aria-hidden={status !== "ready"}>
           <Suspense fallback={null}>

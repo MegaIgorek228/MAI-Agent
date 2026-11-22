@@ -113,18 +113,70 @@ function addBatch(group: THREE.Group, parts: THREE.BufferGeometry[], material: T
 }
 
 function projectedShape(shape: THREE.Shape, side: number, offset: number) {
-  const geometry = new THREE.ShapeGeometry(shape, 6);
-  const vertices = geometry.getAttribute("position");
-  for (let i = 0; i < vertices.count; i += 1) {
-    vertices.setZ(i, projectedZ(vertices.getX(i), vertices.getY(i), side, offset));
+  const tessellation = new THREE.ShapeGeometry(shape, 6);
+  const vertices = tessellation.getAttribute("position");
+  const indices = tessellation.getIndex()!;
+  const positions: number[] = [];
+  const triangles: number[] = [];
+  const a = new THREE.Vector2();
+  const b = new THREE.Vector2();
+  const c = new THREE.Vector2();
+  const point = new THREE.Vector2();
+  tessellation.computeBoundingBox();
+  const bounds = tessellation.boundingBox!;
+  const barrel = bounds.min.x >= -6.60 && bounds.max.x <= 4.85;
+  const longitudinal = (bounds.max.x - bounds.min.x) * (barrel ? .2 : 1);
+  const steps = Math.max(1, Math.ceil(Math.max(longitudinal, bounds.max.y - bounds.min.y) / .12));
+
+  for (let index = 0; index < indices.count; index += 3) {
+    const corners = [a, b, c];
+    corners.forEach((vertex, i) => {
+      const source = indices.getX(index + i);
+      vertex.set(vertices.getX(source), vertices.getY(source));
+    });
+    const from = positions.length / 3;
+    const rowStart = (row: number) => from + row * (steps + 1) - row * (row - 1) / 2;
+    for (let row = 0; row <= steps; row += 1) {
+      for (let column = 0; column <= steps - row; column += 1) {
+        point.copy(a).multiplyScalar(1 - (row + column) / steps)
+          .addScaledVector(b, row / steps).addScaledVector(c, column / steps);
+        positions.push(point.x, point.y, projectedZ(point.x, point.y, side, offset));
+        if (row + column === steps) continue;
+        const start = rowStart(row) + column;
+        const next = rowStart(row + 1) + column;
+        triangles.push(start, next, start + 1);
+        if (row + column < steps - 1) triangles.push(start + 1, next, next + 1);
+      }
+    }
   }
+  tessellation.dispose();
+  if (side < 0) {
+    for (let index = 0; index < triangles.length; index += 3) {
+      [triangles[index + 1], triangles[index + 2]] = [triangles[index + 2], triangles[index + 1]];
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(triangles);
   geometry.computeVertexNormals();
   return geometry;
 }
 
-function ovalWindow(x: number, y: number, width: number, height: number) {
+function roundedPanel(x: number, y: number, width: number, height: number, radius: number) {
+  const left = x - width / 2;
+  const right = x + width / 2;
+  const bottom = y - height / 2;
+  const top = y + height / 2;
   const shape = new THREE.Shape();
-  shape.absellipse(x, y, width / 2, height / 2, 0, 2 * Math.PI, false, 0);
+  shape.moveTo(left + radius, bottom);
+  shape.lineTo(right - radius, bottom);
+  shape.quadraticCurveTo(right, bottom, right, bottom + radius);
+  shape.lineTo(right, top - radius);
+  shape.quadraticCurveTo(right, top, right - radius, top);
+  shape.lineTo(left + radius, top);
+  shape.quadraticCurveTo(left, top, left, top - radius);
+  shape.lineTo(left, bottom + radius);
+  shape.quadraticCurveTo(left, bottom, left + radius, bottom);
   return shape;
 }
 
@@ -204,6 +256,11 @@ function curveLine(points: THREE.Vector3[], thickness: number, closed = false) {
   return new THREE.TubeGeometry(curve, Math.max(24, points.length * 2), thickness, 6, closed);
 }
 
+function skinOutline(shape: THREE.Shape, side: number, width: number) {
+  const points = shape.getPoints(8).slice(0, -1);
+  return curveLine(points.map(({ x, y }) => new THREE.Vector3(x, y, projectedZ(x, y, side, .013))), width, true);
+}
+
 function openingRim(span: Span) {
   const [left, right] = span;
   const points: THREE.Vector3[] = [];
@@ -212,10 +269,71 @@ function openingRim(span: Span) {
       const x = THREE.MathUtils.lerp(left, right, direction === 1 ? step / 36 : 1 - step / 36);
       const [bottom, top] = openingLimits(span, x);
       const y = direction === 1 ? bottom : top;
-      points.push(new THREE.Vector3(x, y, projectedZ(x, y, 1, -.017)));
+      points.push(new THREE.Vector3(x, y, projectedZ(x, y, 1, -.037)));
     }
   }
-  return curveLine(points, .018, true);
+  return curveLine(points, .029, true);
+}
+
+function foilSurface(stations: FoilStation[], span: number, chord: number, side: number, offset: number, vertical = false) {
+  const endIndex = stations.findIndex((station) => station.span >= span);
+  const end = stations[endIndex < 0 ? stations.length - 1 : Math.max(1, endIndex)];
+  const begin = stations[stations.indexOf(end) - 1];
+  const mix = THREE.MathUtils.clamp((span - begin.span) / (end.span - begin.span), 0, 1);
+  const lead = THREE.MathUtils.lerp(begin.lead, end.lead, mix);
+  const tail = THREE.MathUtils.lerp(begin.tail, end.tail, mix);
+  const x = THREE.MathUtils.lerp(lead, tail, chord);
+  const thickness = THREE.MathUtils.lerp(begin.thick, end.thick, mix);
+  const height = THREE.MathUtils.lerp(begin.height, end.height, mix) + thickness * Math.sqrt(4 * chord * (1 - chord)) + offset;
+  return new THREE.Vector3(x, vertical ? span : height, vertical ? side * height : side * span);
+}
+
+function foilPatch(stations: FoilStation[], range: Span, chord: Span, side: number) {
+  const rows = Math.ceil((range[1] - range[0]) * 13);
+  const columns = 5;
+  const stride = columns + 1;
+  const positions: number[] = [];
+  const indices: number[] = [];
+  for (let row = 0; row <= rows; row += 1) {
+    const span = THREE.MathUtils.lerp(...range, row / rows);
+    for (let column = 0; column <= columns; column += 1) {
+      const point = foilSurface(stations, span, THREE.MathUtils.lerp(...chord, column / columns), side, .008);
+      positions.push(point.x, point.y, point.z);
+      if (row === rows || column === columns) continue;
+      const first = row * stride + column;
+      if (side > 0) indices.push(first, first + stride, first + stride + 1, first, first + stride + 1, first + 1);
+      else indices.push(first, first + 1, first + stride + 1, first, first + stride + 1, first + stride);
+    }
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+function foilOutline(stations: FoilStation[], range: Span, chord: Span, side: number) {
+  const points: THREE.Vector3[] = [];
+  for (const position of [0, 1]) {
+    for (let step = 0; step <= 14; step += 1) {
+      const span = THREE.MathUtils.lerp(...range, position === 0 ? step / 14 : 1 - step / 14);
+      points.push(foilSurface(stations, span, chord[position], side, .011));
+    }
+    const end = range[1 - position];
+    for (let step = 1; step < 5; step += 1) {
+      const u = THREE.MathUtils.lerp(chord[position], chord[1 - position], step / 5);
+      points.push(foilSurface(stations, end, u, side, .011));
+    }
+  }
+  return curveLine(points, .006, true);
+}
+
+function tailHinge(stations: FoilStation[], side: number) {
+  const points = Array.from({ length: 19 }, (_, i) => {
+    const span = THREE.MathUtils.lerp(1.19, 3.79, i / 18);
+    return foilSurface(stations, span, .755, side, .008, true);
+  });
+  return curveLine(points, .009);
 }
 
 function engineLathe(profile: [number, number][], material: THREE.Material) {
@@ -227,41 +345,69 @@ function engineLathe(profile: [number, number][], material: THREE.Material) {
 function engine(hull: THREE.Material, lip: THREE.Material, housing: THREE.Material, bladesMaterial: THREE.Material) {
   const group = new THREE.Group();
   group.add(
-    engineLathe([[-1.13, .51], [-1.19, .55], [-1.12, .62], [-.99, .662], [-.58, .69], [.02, .66], [.53, .59], [.79, .43], [.91, .35]], hull),
-    engineLathe([[-1.13, .51], [-1.19, .55], [-1.12, .62], [-1.04, .647]], lip),
-    engineLathe([[-1.13, .51], [-.97, .49], [-.73, .45], [-.62, .02]], housing),
-    engineLathe([[.77, .43], [.87, .365], [1.01, .34], [1.015, .285], [.87, .274]], housing),
-    engineLathe([[-1.04, .012], [-1.025, .085], [-.965, .132], [-.76, .144]], lip),
+    engineLathe([[-1.18, .52], [-1.19, .56], [-1.12, .621], [-.99, .66], [-.71, .686], [-.48, .69], [.02, .665], [.47, .601], [.71, .496], [.84, .396], [.9, .351]], hull),
+    engineLathe([[-1.18, .52], [-1.193, .53], [-1.195, .558], [-1.16, .591], [-1.12, .625], [-1.075, .638]], lip),
+    engineLathe([[-1.183, .523], [-1.06, .508], [-.86, .474], [-.68, .446], [-.62, .02]], housing),
+    engineLathe([[.71, .495], [.78, .453], [.833, .401]], lip),
+    engineLathe([[.833, .40], [.89, .365], [.99, .341], [1.001, .302], [.967, .283], [.88, .272]], housing),
+    engineLathe([[.895, .353], [.976, .346], [1, .336], [1.01, .318]], bladesMaterial),
+    engineLathe([[.82, .231], [1.02, .20], [1.08, .126], [1.105, .012]], bladesMaterial),
+    engineLathe([[-1.057, .01], [-1.028, .073], [-.978, .113], [-.928, .132], [-.76, .144]], lip),
   );
 
   const blades: THREE.BufferGeometry[] = [];
-  for (let blade = 0; blade < 19; blade += 1) {
-    const theta = 2 * Math.PI * blade / 19;
-    const radial = (r: number, offset: number) => [Math.sin(theta + offset) * r, Math.cos(theta + offset) * r];
-    const inner = radial(.12, .03);
-    const outer = radial(.459, .21);
-    const swept = radial(.455, .31);
-    const trailing = radial(.13, .20);
+  const bladeCount = 22;
+  for (let blade = 0; blade < bladeCount; blade += 1) {
+    const theta = 2 * Math.PI * blade / bladeCount;
+    const positions: number[] = [];
+    const indices: number[] = [];
+    for (let row = 0; row <= 5; row += 1) {
+      const t = row / 5;
+      const radius = THREE.MathUtils.lerp(.118, .469, t);
+      const twist = .318 * t ** 1.5;
+      for (let column = 0; column <= 3; column += 1) {
+        const u = column / 3;
+        const angle = theta + twist + u * THREE.MathUtils.lerp(.228, .117, t);
+        const x = -.918 + .055 * t - .021 * Math.sin(u * Math.PI) + u * (.066 - .032 * t);
+        positions.push(x, Math.sin(angle) * radius, Math.cos(angle) * radius);
+        if (row === 5 || column === 3) continue;
+        const first = row * 4 + column;
+        indices.push(first, first + 4, first + 5, first, first + 5, first + 1);
+      }
+    }
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute([
-      -.845, ...inner, -.88, ...outer, -.832, ...swept, -.81, ...trailing,
-    ], 3));
-    geometry.setIndex([0, 1, 2, 0, 2, 3]);
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setIndex(indices);
     geometry.computeVertexNormals();
     blades.push(geometry);
   }
   addBatch(group, blades, bladesMaterial);
+  const nacelleJoints = [
+    engineLathe([[-.725, .684], [-.718, .687], [-.711, .687]], bladesMaterial),
+    engineLathe([[.444, .6072], [.453, .6066], [.463, .6052]], bladesMaterial),
+  ];
+  const door = Array.from({ length: 19 }, (_, index) => {
+    const t = index / 18;
+    const radial = .675 + .014 * Math.sin(t * Math.PI) - .062 * t ** 3;
+    return new THREE.Vector3(THREE.MathUtils.lerp(-.7, .44, t), -.079, radial);
+  });
+  group.add(...nacelleJoints, new THREE.Mesh(curveLine(door, .004), bladesMaterial));
   return group;
 }
 
 export function createAircraftExterior(): { body: THREE.Group; panels: THREE.Group } {
   const body = new THREE.Group();
+  body.name = "Fuselage, flight surfaces and propulsion";
   const panels = new THREE.Group();
-  const ivory = new THREE.MeshStandardMaterial({ color: "#e9e8e1", roughness: .43, metalness: .19, side: THREE.DoubleSide });
-  const silver = new THREE.MeshStandardMaterial({ color: "#c0c5c4", roughness: .46, metalness: .44, side: THREE.DoubleSide });
+  panels.name = "Removable exterior panels";
+  const ivory = new THREE.MeshStandardMaterial({ color: "#dddcd6", roughness: .38, metalness: .24, side: THREE.DoubleSide });
+  const silver = new THREE.MeshStandardMaterial({ color: "#a5aeb3", roughness: .43, metalness: .48, side: THREE.DoubleSide });
+  const flightSurface = new THREE.MeshStandardMaterial({ color: "#bcc3c5", roughness: .56, metalness: .32, side: THREE.DoubleSide });
+  const trim = new THREE.MeshStandardMaterial({ color: "#87949a", roughness: .36, metalness: .48, side: THREE.DoubleSide });
+  const hatch = new THREE.MeshStandardMaterial({ color: "#d2d1cb", roughness: .43, metalness: .23, side: THREE.DoubleSide });
   const slate = new THREE.MeshStandardMaterial({ color: "#384d60", roughness: .48, metalness: .19, side: THREE.DoubleSide });
   const seal = new THREE.MeshStandardMaterial({ color: "#616d72", roughness: .55, metalness: .24, side: THREE.DoubleSide });
-  const glass = new THREE.MeshStandardMaterial({ color: "#263b49", roughness: .23, metalness: .38, side: THREE.DoubleSide });
+  const glass = new THREE.MeshStandardMaterial({ color: "#213441", roughness: .26, metalness: .33, side: THREE.DoubleSide });
   const rotorMetal = new THREE.MeshStandardMaterial({ color: "#7f8789", roughness: .45, metalness: .55, side: THREE.DoubleSide });
   const intakeDark = new THREE.MeshStandardMaterial({ color: "#262b2d", roughness: .74, metalness: .19, side: THREE.DoubleSide });
   const spans: { range: Span; opening: boolean }[] = [];
@@ -308,13 +454,40 @@ export function createAircraftExterior(): { body: THREE.Group; panels: THREE.Gro
   const panelWindows: THREE.BufferGeometry[] = [];
   const bodySeals: THREE.BufferGeometry[] = [];
   const panelSeals: THREE.BufferGeometry[] = [];
+  const bodyHatches: THREE.BufferGeometry[] = [];
+  const panelHatches: THREE.BufferGeometry[] = [];
+  const bodySeams: THREE.BufferGeometry[] = [];
+  const panelSeams: THREE.BufferGeometry[] = [];
   for (const side of [1, -1]) {
+    const doors = [-6.29, 6.08];
     for (let x = -5.02; x < 6.52; x += .46) {
-      if (x > .61 && x < 1.28) continue;
+      if ((x > .61 && x < 1.28) || doors.some((door) => Math.abs(x - door) < .39)) continue;
       const covered = side === 1 && openings.some(([left, right]) => x > left && x < right);
-      (covered ? panelSeals : bodySeals).push(projectedShape(ovalWindow(x, .27, .237, .343), side, .014));
-      (covered ? panelWindows : bodyWindows).push(projectedShape(ovalWindow(x, .27, .20, .304), side, .027));
+      (covered ? panelSeals : bodySeals).push(projectedShape(roundedPanel(x, .27, .217, .33, .092), side, .013));
+      (covered ? panelWindows : bodyWindows).push(projectedShape(roundedPanel(x, .27, .176, .283, .076), side, .022));
     }
+    for (const x of doors) {
+      const covered = x < 0 && side === 1;
+      const door = roundedPanel(x, .15, .58, 1.32, .111);
+      const outlines = covered ? panelSeams : bodySeams;
+      const glazings = covered ? panelWindows : bodyWindows;
+      (covered ? panelHatches : bodyHatches).push(projectedShape(door, side, .009));
+      outlines.push(skinOutline(door, side, .0065));
+      glazings.push(projectedShape(roundedPanel(x, .40, .115, .175, .047), side, .022));
+      (covered ? panelSeals : bodySeals).push(projectedShape(roundedPanel(x + .128, .01, .142, .048, .017), side, .024));
+    }
+    for (const [x, width] of [[-4.34, 1.26], [3.54, 1.60]]) {
+      const cargo = roundedPanel(x, -.853, width, .357, .068);
+      bodyHatches.push(projectedShape(cargo, side, .009));
+      bodySeams.push(skinOutline(cargo, side, .0065));
+      bodySeals.push(projectedShape(roundedPanel(x + width * .23, -.81, .13, .046, .017), side, .019));
+    }
+    const radome = Array.from({ length: 30 }, (_, i) => {
+      const x = -9.25 - (i / 29) * .10;
+      const y = THREE.MathUtils.lerp(-.57, .48, i / 29);
+      return new THREE.Vector3(x, y, projectedZ(x, y, side, .009));
+    });
+    bodySeams.push(curveLine(radome, .006));
     const windshield: [number, number][][] = [
       [[-9.17, .14], [-8.90, .54], [-8.60, .57], [-8.75, .165]],
       [[-8.68, .156], [-8.53, .57], [-8.20, .562], [-8.20, .16]],
@@ -323,12 +496,19 @@ export function createAircraftExterior(): { body: THREE.Group; panels: THREE.Gro
     windshield.forEach((points) => {
       const polygon = new THREE.Shape(points.map(([x, y]) => new THREE.Vector2(x, y)));
       bodyWindows.push(projectedShape(polygon, side, .024));
+      const outline = [...points, points[0]].map(([x, y]) => new THREE.Vector3(x, y, projectedZ(x, y, side, .026)));
+      bodySeams.push(curveLine(outline, .008));
     });
+    const wiper: [number, number][] = [[-8.867, .186], [-8.79, .245], [-8.682, .348], [-8.63, .398]];
+    bodySeams.push(curveLine(wiper.map(([x, y]) => new THREE.Vector3(x, y, projectedZ(x, y, side, .033))), .007));
   }
+  addBatch(body, bodyHatches, hatch);
+  addBatch(panels, panelHatches, hatch);
   addBatch(body, bodySeals, seal);
   addBatch(panels, panelSeals, seal);
   addBatch(body, bodyWindows, glass);
   addBatch(panels, panelWindows, glass);
+  addBatch(panels, panelSeams, trim);
 
   const wingStations: FoilStation[] = [
     { lead: -2.54, tail: 2.74, span: .85, height: -.72, thick: .23 },
@@ -339,12 +519,51 @@ export function createAircraftExterior(): { body: THREE.Group; panels: THREE.Gro
     { lead: 2.83, tail: 3.69, span: 7.05, height: -.08, thick: .01 },
   ];
   addFoilPair(body, wingStations, silver);
-  addFoilPair(body, [
+  const stabilizer: FoilStation[] = [
     { lead: 6.8, tail: 9.46, span: .30, height: .48, thick: .13 },
     { lead: 7.3, tail: 9.37, span: 1.2, height: .53, thick: .10 },
     { lead: 8.49, tail: 9.85, span: 2.85, height: .7, thick: .068 },
     { lead: 8.84, tail: 9.84, span: 3.2, height: .74, thick: .02 },
-  ], silver);
+  ];
+  addFoilPair(body, stabilizer, silver);
+  const surfacePanels: THREE.BufferGeometry[] = [];
+  for (const side of [1, -1]) {
+    const flaps: Span[] = [[1.44, 2.78], [2.87, 4.69], [4.78, 6.59]];
+    for (const span of flaps) {
+      surfacePanels.push(foilPatch(wingStations, span, [.748, .981], side));
+      bodySeams.push(foilOutline(wingStations, span, [.745, .982], side));
+    }
+    const spoilers: Span[] = [[2.18, 2.96], [3.02, 3.72], [3.78, 4.45]];
+    for (const span of spoilers) bodySeams.push(foilOutline(wingStations, span, [.54, .714], side));
+    surfacePanels.push(foilPatch(wingStations, [1.46, 6.8], [.022, .158], side));
+    bodySeams.push(foilOutline(stabilizer, [.98, 3.02], [.701, .965], side));
+    for (const span of [2.15, 3.95, 5.39]) {
+      const center = foilSurface(wingStations, span, .785, side, -.23);
+      const fairing = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), silver);
+      fairing.scale.set(.49, .135, .103);
+      fairing.rotation.y = -.125 * side;
+      fairing.position.copy(center);
+      body.add(fairing);
+    }
+
+    const wingletStations: FoilStation[] = [
+      { lead: 2.72, tail: 3.72, span: -.095, height: side * 6.98, thick: .078 },
+      { lead: 2.92, tail: 3.68, span: .05, height: side * 7.04, thick: .061 },
+      { lead: 3.22, tail: 3.66, span: .42, height: side * 7.18, thick: .032 },
+      { lead: 3.46, tail: 3.65, span: .60, height: side * 7.22, thick: .012 },
+    ];
+    body.add(new THREE.Mesh(foilGeometry(wingletStations, true), ivory));
+    const navigationLight = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 6), new THREE.MeshStandardMaterial({
+      color: side > 0 ? "#af433d" : "#537b66",
+      emissive: side > 0 ? "#65291f" : "#1c5a3d",
+      emissiveIntensity: .4,
+      roughness: .22,
+    }));
+    navigationLight.scale.set(.082, .043, .056);
+    navigationLight.position.set(2.95, .058, side * 7.046);
+    body.add(navigationLight);
+  }
+  addBatch(body, surfacePanels, flightSurface);
 
   const tail: FoilStation[] = [
     { lead: 5.82, tail: 9.83, span: .64, height: 0, thick: .19 },
@@ -355,9 +574,19 @@ export function createAircraftExterior(): { body: THREE.Group; panels: THREE.Gro
   ];
   body.add(new THREE.Mesh(foilGeometry(tail, true), ivory));
   body.add(new THREE.Mesh(finPaint(tail, .81, .992), slate), new THREE.Mesh(finPaint(tail, .747, .775), slate));
+  for (const side of [1, -1]) bodySeams.push(tailHinge(tail, side));
+
+  const antenna = new THREE.Mesh(foilGeometry([
+    { lead: -.7, tail: -.37, span: 1.252, height: 0, thick: .036 },
+    { lead: -.59, tail: -.39, span: 1.39, height: 0, thick: .025 },
+    { lead: -.47, tail: -.395, span: 1.455, height: 0, thick: .010 },
+  ], true), ivory);
+  body.add(antenna);
+  addBatch(body, bodySeams, trim);
 
   for (const side of [1, -1]) {
     const turbofan = engine(ivory, silver, intakeDark, rotorMetal);
+    turbofan.scale.z = side;
     turbofan.position.set(-.9, -1.47, side * 2.78);
     body.add(turbofan);
 

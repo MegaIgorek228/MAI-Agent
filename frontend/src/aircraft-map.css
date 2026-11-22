@@ -59,6 +59,31 @@
 
 .aircraft-scene__canvas[aria-hidden="true"] { visibility: hidden; }
 
+.aircraft-scene__loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .65rem;
+  color: var(--muted);
+  font-size: .8rem;
+  pointer-events: none;
+}
+
+.aircraft-scene__loading span {
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 2px solid #abb2b7;
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: aircraft-loading .85s linear infinite;
+}
+
+@keyframes aircraft-loading {
+  to { transform: rotate(360deg); }
+}
+
 .flight-map:not([data-view="home"]) .flight-map__scene {
   height: clamp(6.9rem, 15cqi, 10.4rem);
 }
