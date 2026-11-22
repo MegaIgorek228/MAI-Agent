@@ -20,6 +20,8 @@ Python, FastAPI, Hermes Agent, ACP, MCP/FastMCP, PostgreSQL, pgvector, React, Ty
 
 Compose использует Hermes 0.19, ACP SDK 0.9 и FastMCP 2.14.7. Модель для чата и анализа документов по умолчанию — `deepseek-v4.1-flash`, для эмбеддингов — `bge-m3` (1024 измерения).
 
+Полная инструкция по развёртыванию на новой машине — секреты, первый сотрудник, обновление и устранение неполадок: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
 ## Структура проекта
 
 ```text
