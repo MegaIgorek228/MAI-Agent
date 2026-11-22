@@ -12,6 +12,8 @@ Covers:
 9. staff cannot review a document through an application that does not own it.
 """
 
+import pytest
+
 from test_admissions_workflow import APPLICATION, RULES, staff_headers, upload
 from test_applicant_features import auth_headers
 
@@ -106,6 +108,10 @@ def test_document_queue_filters_search_and_audit(client):
     assert client.get("/applicant/staff/documents", headers=staff, params={"status": "rejected"}).json()[0]["review_note"] == "Файл не читается"
 
     # Requesting a correction is a first-class decision.
+    correction_without_note = client.patch(
+        doc_path, headers=staff, json={"status": "changes_requested", "review_note": "  "},
+    )
+    assert correction_without_note.status_code == 422
     changed = client.patch(doc_path, headers=staff, json={
         "status": "changes_requested", "review_note": "Загрузите обе страницы паспорта",
     }).json()
@@ -118,6 +124,80 @@ def test_document_queue_filters_search_and_audit(client):
         "draft", "submitted", "under_review",
         "document_reviewed", "document_reviewed", "document_reviewed",
     ]
+
+
+def test_pending_queue_and_dashboard_exclude_finalized_applications(client):
+    staff = staff_headers(client)
+    applicant = auth_headers(client, "pending-finalized@example.com")
+    _published_rules(client, staff)
+    required = upload(client, applicant).json()
+    optional = client.post(
+        "/applicant/documents", headers=applicant,
+        files={"file": ("optional.txt", b"optional additional file", "text/plain")},
+        data={"document_type": "additional"},
+    )
+    assert optional.status_code == 201, optional.text
+    created = client.post(
+        "/applicant/applications", headers=applicant,
+        json={**APPLICATION, "document_ids": [required["id"], optional.json()["id"]]},
+    )
+    assert created.status_code == 201, created.text
+    application_id = created.json()["id"]
+    staff_path = f"/applicant/staff/applications/{application_id}"
+    assert client.post(f"/applicant/applications/{application_id}/submit", headers=applicant).status_code == 200
+    assert client.patch(f"{staff_path}/status", headers=staff, json={"status": "under_review"}).status_code == 200
+    assert client.patch(
+        f"{staff_path}/documents/{required['id']}", headers=staff, json={"status": "accepted"},
+    ).status_code == 200
+
+    queue_path = "/applicant/staff/documents"
+    dashboard_path = "/applicant/staff/dashboard"
+    pending = {"status": "pending"}
+    assert [row["document_id"] for row in client.get(queue_path, headers=staff, params=pending).json()] == [
+        optional.json()["id"],
+    ]
+    assert client.get(dashboard_path, headers=staff).json()["documents_awaiting_review"] == 1
+
+    assert client.patch(f"{staff_path}/status", headers=staff, json={"status": "reviewed"}).status_code == 200
+    assert client.get(queue_path, headers=staff, params=pending).json() == []
+    assert client.get(dashboard_path, headers=staff).json()["documents_awaiting_review"] == 0
+    assert len(client.get(queue_path, headers=staff).json()) == 2
+
+
+@pytest.mark.parametrize("edit", ["application", "document_type"])
+def test_edit_clears_current_review_but_keeps_history(client, edit):
+    staff = staff_headers(client)
+    applicant = auth_headers(client, "pending-audit-reset@example.com")
+    _published_rules(client, staff)
+    document_id = upload(client, applicant).json()["id"]
+    application_id = _submitted_application(client, staff, applicant, document_id)
+    staff_path = f"/applicant/staff/applications/{application_id}"
+    applicant_path = f"/applicant/applications/{application_id}"
+
+    assert client.patch(f"{staff_path}/status", headers=staff, json={"status": "under_review"}).status_code == 200
+    decision = client.patch(
+        f"{staff_path}/documents/{document_id}", headers=staff,
+        json={"status": "changes_requested", "review_note": "Требуется читаемая копия"},
+    )
+    assert decision.json()["reviewer"] == "admissions-staff@example.com"
+    assert client.patch(f"{staff_path}/status", headers=staff, json={"status": "needs_changes"}).status_code == 200
+    if edit == "application":
+        response = client.patch(applicant_path, headers=applicant, json={"program": "09.03.02"})
+    else:
+        response = client.patch(f"/applicant/documents/{document_id}/type", headers=applicant, json={"document_type": "passport"})
+    assert response.status_code == 200, response.text
+
+    detail = client.get(staff_path, headers=staff).json()
+    assert detail["documents"][0]["reviewed_at"] is None
+    assert detail["documents"][0]["reviewer"] is None
+    assert "document_reviewed" in [item["status"] for item in detail["history"]]
+    queue_path = "/applicant/staff/documents"
+    assert client.get(queue_path, headers=staff, params={"status": "pending"}).json() == []
+    pending_row = client.get(queue_path, headers=staff).json()[0]
+    assert pending_row["review_status"] is None
+    assert pending_row["review_note"] is None
+    assert pending_row["reviewed_at"] is None
+    assert pending_row["reviewer"] is None
 
 
 def test_cannot_review_documents_outside_own_application(client):

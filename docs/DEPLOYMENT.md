@@ -23,13 +23,11 @@
 ## Шаг 1. Клонирование репозитория
 
 ```powershell
-git clone git@github.com:MegaIgorek228/MAI-Agent.git
+git clone --branch fixes/admissions-workflows https://github.com/MegaIgorek228/MAI-Agent.git
 cd MAI-Agent
 ```
 
-(или `https://github.com/MegaIgorek228/MAI-Agent.git`, если работаете без SSH-ключа).
-
-Ветка разработки: `fixes/admissions-workflows`.
+Если репозиторий уже клонирован, выполните `git switch fixes/admissions-workflows`.
 
 ## Шаг 2. Файл окружения `.env`
 
@@ -47,7 +45,7 @@ cp .env.example .env
 | Переменная | Что сделать | Зачем |
 |---|---|---|
 | `LLM_API_KEY` | вставить ключ MAI API (`api-ai.mai.ru`) | чат с ассистентом и анализ документов; без него приложение поднимется, но ИИ-функции не будут работать |
-| `POSTGRES_PASSWORD` | задать своё значение | пароль БД (по умолчанию `change_me`) |
+| `POSTGRES_PASSWORD` | задать своё случайное URL-безопасное значение | пароль БД подставляется в строку подключения (по умолчанию `change_me`) |
 | `JWT_SECRET_KEY` | задать своё длинное случайное значение | подпись JWT-токенов; при смене все сессии сбрасываются |
 
 Опциональные:
@@ -63,7 +61,7 @@ cp .env.example .env
 APP_ENV=development
 POSTGRES_DB=mai_agent
 POSTGRES_USER=mai_agent
-POSTGRES_PASSWORD=<своё-пароль>
+POSTGRES_PASSWORD=<свой-пароль>
 JWT_SECRET_KEY=<своё-длинное-случайное>
 LLM_BASE_URL=https://api-ai.mai.ru/v1
 LLM_API_KEY=<ключ MAI API>
@@ -87,7 +85,7 @@ docker compose up --build -d
 ```powershell
 # HTTP 200 = PostgreSQL отвечает и схема на текущей ревизии
 curl http://localhost:8000/ready
-# {"status":"ok"}
+# {"status":"ready"}
 curl http://localhost:8000/health
 ```
 
@@ -105,7 +103,7 @@ docker compose ps
 
 ```powershell
 # внутри контейнера backend (нужен DATABASE_URL — он уже там):
-docker exec -it mai-agent-backend-1 python -m app.admin_cli staff-invite create --days 7 --note "Имя сотрудника"
+docker compose exec backend python -m app.admin_cli staff-invite create --days 7 --note "Имя сотрудника"
 ```
 
 Вывод: `Invitation #1 created.`, `Code: <код>`, срок действия. Код выводится **один раз**.
@@ -129,34 +127,27 @@ docker exec -it mai-agent-backend-1 python -m app.admin_cli staff-invite create 
 
 ## Шаг 6. Синтетический реестр ЕГЭ (опционально)
 
-Сверка «Сверить с тестовым реестром» работает по синтетическим записям с идентификаторами `SYN-`. Загрузка файла — отдельная CLI-команда, читающая путь до JSON:
-
-- **В Compose-стенде** (файл нужно положить в контейнер):
+Сверка работает по синтетическим записям с идентификаторами `SYN-`. В образ backend включён пример с анкетами и баллами. Загрузите его командой:
 
 ```bash
-docker cp synthetic-results.json mai-agent-backend-1:/tmp/synthetic-results.json
-docker exec mai-agent-backend-1 python -m app.synthetic_ege_registry /tmp/synthetic-results.json
+docker compose exec backend python -m app.synthetic_ege_registry /app/fixtures/synthetic_ege_registry.json
 ```
 
-- **В локальной разработке** (каталог `backend`, виртуальное окружение, `DATABASE_URL` на вашу БД):
+Для собственного файла укажите путь внутри контейнера. В локальной разработке выполните команду из каталога `backend` с настроенным `DATABASE_URL`:
 
 ```bash
 cd backend
-python -m app.synthetic_ege_registry /path/to/synthetic-results.json
+python -m app.synthetic_ege_registry fixtures/synthetic_ege_registry.json
 ```
 
-Формат элемента:
-
-```json
-{"candidate_id": "SYN-DEMO", "subject": "Математика", "year": 2026, "score": 85, "status": "valid"}
-```
+В JSON анкеты находятся в массиве `candidates`, а баллы в массиве `results`. В кабинете абитуриента откройте черновик заявления, укажите и сохраните тестовый идентификатор `SYN-…`, затем нажмите «Обновить баллы из тестового реестра». В чате ассистент может найти тестовую запись по ФИО и дате рождения и привязать её после подтверждения. Чтобы применить исправление к ранее загруженным тестовым записям, добавьте к команде `--replace-conflicts`.
 
 ## Шаг 7. Проверка рабочего сценария
 
 Короткий сценарий для подтверждения, что всё живое:
 
 1. **Абитуриент**: зарегистрироваться → заполнить профиль → загрузить документ → создать заявление по опубликованным правилам → подать.
-2. **Сотрудник**: «Заявления» → открыть → «На проверку» → «Проверка документов» (очередь) → открыть карточку → «Просмотреть файл» → «Принять файл» / «Запросить исправление» (с комментарием).
+2. **Сотрудник**: в очереди «Проверка документов» открыть файл, взять заявление на проверку и зафиксировать решение. Если нужен новый файл, оставить комментарий к документу и вернуть заявление на доработку.
 3. **Абитуриент**: в заявлении виден статус решения и комментарий; при «Требуются изменения» можно загрузить исправленный документ и отправить снова.
 4. **Чат**: в «Салоне» написать вопрос — ответ приходит через Hermes (первый запрос на сессию может занять до минуты: запуск ACP-процесса).
 
@@ -183,7 +174,7 @@ docker exec -i mai-agent-postgres-1 psql -U mai_agent -d mai_agent < backup_2026
 
 | Симптом | Причина / решение |
 |---|---|
-| `port is already allocated` при `up` | Порт занят (часто 5432 — локальный PostgreSQL). Либо остановите локальный PostgreSQL, либо используйте переопределение из репозитория: `docker compose -f docker-compose.yml -f compose.local.yml up -d` (postgres публикуется на 5433, сервисы внутри сети не меняются). Альтернатива — поменять порты в `docker-compose.yml`. |
+| `port is already allocated` при `up` | Освободите занятый порт или измените порт слева в соответствующей записи `ports` файла `docker-compose.yml`. Например, `"5433:5432"` публикует PostgreSQL на 5433. |
 | Backend в цикле перезапусков, в логах ошибка миграции | `docker logs mai-agent-backend-1` — обычно видна конкретная причина (например, конфликт ревизий). Миграции транзакционные, БД не повреждается. |
 | Чат отвечает ошибкой про провайдера/модель | Не задан `LLM_API_KEY` в `.env` (после правки — `docker compose up -d backend`). Без ключа Hermes падает на дефолтный провайдер. |
 | Ошибки TLS при вызовах LLM | Установить `AI_API_CA_BUNDLE=/app/certs/mai-api-ca-chain.pem` в `.env` и пересоздать backend. |
@@ -199,7 +190,7 @@ Unit/API-тесты (нужен только Python, Docker не требует�
 ```powershell
 cd backend
 python -m venv .venv
-.\\.venv\\Scripts\\Activate.ps1   # Windows; в Linux: source .venv/bin/activate
+.\.venv\Scripts\Activate.ps1   # Windows; в Linux/macOS: source .venv/bin/activate
 pip install -e ".[test]"
 python -m pytest ../tests -q
 ```
@@ -215,7 +206,7 @@ python scripts/e2e_compose.py
 
 ## Чек-лист готовности нового ПК
 
-- [ ] `docker compose ps` — три сервиса healthy.
+- [ ] `docker compose ps` показывает запущенный frontend и статус healthy у backend и PostgreSQL.
 - [ ] `curl http://localhost:8000/ready` — 200.
 - [ ] http://localhost:5173 — открывается сайт приёмной комиссии.
 - [ ] Создан и использован код приглашения — сотрудник видит рабочее место.

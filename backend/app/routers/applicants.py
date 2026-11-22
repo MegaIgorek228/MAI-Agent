@@ -188,7 +188,7 @@ def update_document_type(
         db.execute(
             update(ApplicationDocument)
             .where(ApplicationDocument.document_id == document.id)
-            .values(review_status=None, review_note=None)
+            .values(review_status=None, review_note=None, reviewed_at=None, reviewed_by=None)
         )
         db.commit()
         db.refresh(document)
@@ -267,4 +267,3 @@ def analyze_uploaded_document(
     document.status = "analyzed"
     db.commit()
     return {"document_id": document.id, "analysis": result.model_dump(mode="json")}
-

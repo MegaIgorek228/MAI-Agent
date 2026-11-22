@@ -204,6 +204,19 @@ def test_all_invite_failures_share_one_generic_error(client):
 # --- 7-10: achievements ------------------------------------------------------
 
 
+def test_patch_achievement_rejects_explicit_null_for_required_fields(client):
+    headers = make_applicant(client, "partial-achievement@example.com")
+    created = create_achievement(client, headers, organization="Original organization")
+    path = f"/applicant/achievements/{created['id']}"
+    for field in ("category", "title", "achieved_on"):
+        assert client.patch(path, headers=headers, json={field: None}).status_code == 422
+
+    update = client.patch(path, headers=headers, json={"organization": None})
+    assert update.status_code == 200
+    assert update.json()["title"] == created["title"]
+    assert update.json()["organization"] is None
+
+
 def test_applicant_cannot_touch_foreign_achievements(client):
     owner = make_applicant(client, "owner@example.com")
     outsider = make_applicant(client, "outsider@example.com")
@@ -249,10 +262,17 @@ def test_staff_review_flow_with_history(client):
     staff, _ = make_staff(client, "reviewer@example.com")
     achievement = create_achievement(client, applicant)
     client.post(f"/applicant/achievements/{achievement['id']}/submit", headers=applicant)
+    draft = create_achievement(client, applicant, title="Draft for status filter")
 
     queue = client.get("/applicant/staff/achievements", headers=staff, params={"ach_status": "pending"})
     assert queue.status_code == 200
     assert [item["id"] for item in queue.json()] == [achievement["id"]]
+    queue = client.get("/applicant/staff/achievements", headers=staff, params={"status": "pending"})
+    assert queue.status_code == 200
+    assert [item["id"] for item in queue.json()] == [achievement["id"]]
+    drafts = client.get("/applicant/staff/achievements", headers=staff, params={"status": "draft"})
+    assert drafts.status_code == 200
+    assert [item["id"] for item in drafts.json()] == [draft["id"]]
 
     card = client.get(f"/applicant/staff/achievements/{achievement['id']}", headers=staff)
     assert card.status_code == 200
@@ -455,6 +475,12 @@ def test_dashboard_counts_and_applicant_card(client):
     assert len(listing) == 2
     row_a = next(row for row in listing if row["email"] == "dash-a@example.com")
     assert row_a["first_name"] == "Алексей"
+    for full_name in ("Тестов Алексей", "Алексей  Тестов"):
+        full_name_listing = client.get(
+            "/applicant/staff/applicants", headers=staff, params={"q": full_name}
+        )
+        assert full_name_listing.status_code == 200
+        assert [row["id"] for row in full_name_listing.json()] == [row_a["id"]]
 
     card = client.get(f"/applicant/staff/applicants/{row_a['id']}", headers=staff).json()
     assert card["profile"]["last_name"] == "Тестов"

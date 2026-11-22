@@ -10,8 +10,9 @@ Fixture format (JSON):
 - [ {...}, ... ] — a flat list of results (legacy layout, candidates untouched).
 
 All entries are required to be synthetic (candidate ids start with "SYN-").
-The loader is idempotent: re-loading the same fixture adds nothing; a
-conflicting fixture value is an error, never a silent overwrite.
+The loader applies the complete fixture in one transaction. Re-loading the
+same fixture changes nothing. Updating existing values requires the explicit
+--replace-conflicts option; contradictory rows within a file are always rejected.
 """
 
 import argparse
@@ -38,43 +39,79 @@ def _parse(raw: bytes) -> tuple[list[SyntheticCandidateInput], list[SyntheticEge
     raise ValueError("Fixture must be a JSON object with candidates/results or a JSON list of results")
 
 
-def load_results(db: Session, values: list[SyntheticEgeInput]) -> int:
+def _apply_results(
+    db: Session, values: list[SyntheticEgeInput], *, replace_conflicts: bool,
+) -> tuple[int, int]:
     seen: dict[tuple[str, str, int], SyntheticEgeInput] = {}
     for item in values:
         key = (item.candidate_id, item.subject, item.year)
         if key in seen and seen[key] != item:
             raise ValueError(f"Conflicting synthetic fixture for {key}")
         seen[key] = item
-    count = 0
+    added = updated = 0
     for key, item in seen.items():
         existing = db.get(SyntheticEgeResult, key)
         if existing is None:
             db.add(SyntheticEgeResult(**item.model_dump()))
-            count += 1
+            added += 1
         elif (existing.score, existing.status) != (item.score, item.status):
-            raise ValueError(f"Synthetic fixture {key} is already defined with a different result")
-    db.commit()
-    return count
+            if not replace_conflicts:
+                raise ValueError(f"Synthetic fixture {key} is already defined with a different result")
+            existing.score = item.score
+            existing.status = item.status
+            updated += 1
+    return added, updated
 
 
-def load_candidates(db: Session, values: list[SyntheticCandidateInput]) -> int:
+def _apply_candidates(
+    db: Session, values: list[SyntheticCandidateInput], *, replace_conflicts: bool,
+) -> tuple[int, int]:
     seen: dict[str, SyntheticCandidateInput] = {}
     for item in values:
         if item.candidate_id in seen and seen[item.candidate_id] != item:
             raise ValueError(f"Conflicting synthetic fixture for {item.candidate_id}")
         seen[item.candidate_id] = item
-    count = 0
+    added = updated = 0
     for candidate_id, item in seen.items():
         existing = db.get(SyntheticEgeCandidate, candidate_id)
         if existing is None:
             db.add(SyntheticEgeCandidate(**item.model_dump()))
-            count += 1
+            added += 1
         elif (existing.full_name, existing.date_of_birth) != (item.full_name, item.date_of_birth):
-            raise ValueError(
-                f"Synthetic candidate {candidate_id} is already defined with a different identity"
-            )
+            if not replace_conflicts:
+                raise ValueError(
+                    f"Synthetic candidate {candidate_id} is already defined with a different identity"
+                )
+            existing.full_name = item.full_name
+            existing.date_of_birth = item.date_of_birth
+            updated += 1
+    return added, updated
+
+
+def load_results(db: Session, values: list[SyntheticEgeInput]) -> int:
+    added, _ = _apply_results(db, values, replace_conflicts=False)
     db.commit()
-    return count
+    return added
+
+
+def load_candidates(db: Session, values: list[SyntheticCandidateInput]) -> int:
+    added, _ = _apply_candidates(db, values, replace_conflicts=False)
+    db.commit()
+    return added
+
+
+def load_fixture(
+    db: Session,
+    candidates: list[SyntheticCandidateInput],
+    results: list[SyntheticEgeInput],
+    *,
+    replace_conflicts: bool = False,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return added and updated counts for candidates and scores, respectively."""
+    with db.begin():
+        people = _apply_candidates(db, candidates, replace_conflicts=replace_conflicts)
+        scores = _apply_results(db, results, replace_conflicts=replace_conflicts)
+    return people, scores
 
 
 def main() -> None:
@@ -82,15 +119,22 @@ def main() -> None:
     parser.add_argument(
         "fixture", type=Path, help="JSON fixture with SYN-prefixed synthetic candidates/results"
     )
+    parser.add_argument(
+        "--replace-conflicts", action="store_true",
+        help="Update existing synthetic candidates and results with the same keys",
+    )
     args = parser.parse_args()
     try:
         candidates, results = _parse(args.fixture.read_bytes())
         with SessionLocal() as db:
-            added_people = load_candidates(db, candidates)
-            added_scores = load_results(db, results)
+            (added_people, updated_people), (added_scores, updated_scores) = load_fixture(
+                db, candidates, results, replace_conflicts=args.replace_conflicts,
+            )
     except (OSError, ValidationError, ValueError) as exc:
         parser.exit(2, f"Unable to load synthetic registry: {exc}\n")
     print(f"Added {added_people} candidate(s) and {added_scores} synthetic result(s).")
+    if args.replace_conflicts:
+        print(f"Updated {updated_people} candidate(s) and {updated_scores} synthetic result(s).")
 
 
 if __name__ == "__main__":

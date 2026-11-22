@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import {
   Application,
@@ -54,6 +54,7 @@ const feedAction: Record<string, string> = {
   submitted: "отправлено на проверку",
   resubmitted: "повторно отправлено на проверку",
   reviewed: "проверено",
+  document_reviewed: "решение по документу",
   needs_changes: "требуются изменения",
   confirmed: "подтверждено",
   rejected: "отклонено",
@@ -70,6 +71,8 @@ export function StaffApplications({ token }: { token: string }) {
   const [applications, setApplications] = useState<Application[]>([]);
   const [filters, setFilters] = useState({ query: "", status: "", offset: 0 });
   const [selected, setSelected] = useState<number | null>(null);
+  const [documentTarget, setDocumentTarget] = useState<{ applicationId: number; documentId: number } | null>(null);
+  const [documentQueueRevision, setDocumentQueueRevision] = useState(0);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
 
@@ -104,13 +107,17 @@ export function StaffApplications({ token }: { token: string }) {
     setMode("applications");
   };
 
-  const openApplication = (applicationId: number) => {
-    setFilters({ query: "", status: "", offset: 0 });
-    setSelected(applicationId);
-    setMode("applications");
+  const refreshDocumentQueue = () => setDocumentQueueRevision((revision) => revision + 1);
+
+  const returnToDocumentQueue = () => {
+    setDocumentTarget(null);
+    const heading = document.getElementById("document-queue-heading");
+    heading?.focus({ preventScroll: true });
+    heading?.scrollIntoView({ block: "center" });
   };
 
   const switchTo = (target: StaffMode) => {
+    if (target !== "documents") setDocumentTarget(null);
     setMode(target);
     window.scrollTo({ top: 0, behavior: "instant" });
   };
@@ -128,7 +135,17 @@ export function StaffApplications({ token }: { token: string }) {
         <button type="button" aria-pressed={mode === "rules"} onClick={() => switchTo("rules")}><Icon name="book" /> Правила приёма</button>
       </div>
       {mode === "dashboard" && <StaffDashboard token={token} onNavigate={switchTo} />}
-      {mode === "documents" && <StaffDocumentQueue token={token} onOpenApplication={openApplication} />}
+      {mode === "documents" && (
+        <>
+          <StaffDocumentQueue token={token} revision={documentQueueRevision}
+            onOpenDocument={(applicationId, documentId) => setDocumentTarget({ applicationId, documentId })} />
+          {documentTarget && (
+            <StaffApplicationDetail key={documentTarget.applicationId} token={token} id={documentTarget.applicationId}
+              focusedDocumentId={documentTarget.documentId} onBack={returnToDocumentQueue}
+              onUpdate={refreshDocumentQueue} onDocumentReviewed={refreshDocumentQueue} />
+          )}
+        </>
+      )}
       {mode === "rules" && <AdmissionRuleEditor token={token} />}
       {mode === "applicants" && <StaffApplicantList token={token} onOpenApplication={openApplicantApplications} />}
       {mode === "achievements" && <StaffAchievementsQueue token={token} />}
@@ -198,9 +215,10 @@ export function StaffApplications({ token }: { token: string }) {
   );
 }
 
-function StaffDocumentQueue({ token, onOpenApplication }: {
+function StaffDocumentQueue({ token, revision, onOpenDocument }: {
   token: string;
-  onOpenApplication: (applicationId: number) => void;
+  revision: number;
+  onOpenDocument: (applicationId: number, documentId: number) => void;
 }) {
   const [items, setItems] = useState<StaffDocumentQueueItem[]>([]);
   const [filters, setFilters] = useState({ status: "pending", query: "", offset: 0 });
@@ -222,7 +240,7 @@ function StaffDocumentQueue({ token, onOpenApplication }: {
       if (!ignore) setPending(false);
     });
     return () => { ignore = true; };
-  }, [token, filters]);
+  }, [token, filters, revision]);
 
   const applyFilters = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -240,7 +258,7 @@ function StaffDocumentQueue({ token, onOpenApplication }: {
   return (
     <section className="workflow-panel workflow-queue" aria-labelledby="document-queue-heading">
       <div className="workflow-panel-heading">
-        <h3 id="document-queue-heading">Очередь проверки документов</h3>
+        <h3 id="document-queue-heading" tabIndex={-1}>Очередь проверки документов</h3>
         <p className="workflow-muted">
           Все документы поданных заявлений. Решение по документу открывается в карточке заявления.
         </p>
@@ -271,7 +289,7 @@ function StaffDocumentQueue({ token, onOpenApplication }: {
         <ul className="workflow-list workflow-queue-list">
           {items.map((item) => (
             <li key={`${item.application_id}-${item.document_id}`}>
-              <button className="workflow-queue-row" type="button" onClick={() => onOpenApplication(item.application_id)}>
+              <button className="workflow-queue-row" type="button" onClick={() => onOpenDocument(item.application_id, item.document_id)}>
                 <span className="workflow-mark"><Icon name="file" /></span>
                 <span className="workflow-row-main">
                   <span>{item.filename} · {documentTypeLabel(item.document_type)}</span>
@@ -376,31 +394,58 @@ function StaffDashboard({ token, onNavigate }: {
   );
 }
 
+function StaffListPagination({ offset, hasNext, pending, onPage }: {
+  offset: number;
+  hasNext: boolean;
+  pending: boolean;
+  onPage: (offset: number) => void;
+}) {
+  if (offset === 0 && !hasNext) return null;
+  return (
+    <nav className="workflow-actions" aria-label="Страницы списка">
+      <button className="workflow-secondary" type="button" disabled={pending || offset === 0}
+        onClick={() => onPage(offset - pageSize)}>Предыдущая страница</button>
+      <span className="workflow-muted">Страница {offset / pageSize + 1}</span>
+      <button className="workflow-secondary" type="button" disabled={pending || !hasNext}
+        onClick={() => onPage(offset + pageSize)}>Следующая страница</button>
+    </nav>
+  );
+}
+
 function StaffApplicantList({ token, onOpenApplication }: {
   token: string;
   onOpenApplication: (email: string) => void;
 }) {
   const [rows, setRows] = useState<StaffApplicantRow[] | null>(null);
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState({ query: "", offset: 0 });
   const [selected, setSelected] = useState<number | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let ignore = false;
-    setRows(null);
-    getStaffApplicants(token, query).then((list) => {
-      if (!ignore) setRows(list);
+    setError("");
+    getStaffApplicants(token, filters.query, pageSize + 1, filters.offset).then((list) => {
+      if (ignore) return;
+      if (!list.length && filters.offset > 0) {
+        setFilters((current) => ({ ...current, offset: current.offset - pageSize }));
+      } else {
+        setRows(list);
+      }
     }).catch((requestError) => {
-      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить список абитуриентов"));
+      if (!ignore) {
+        setRows([]);
+        setError(requestErrorMessage(requestError, "Не удалось загрузить список абитуриентов"));
+      }
     });
     return () => { ignore = true; };
-  }, [token, query]);
+  }, [token, filters]);
 
   const applySearch = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
     setSelected(null);
-    setQuery(String(values.get("query") ?? "").trim());
+    setRows(null);
+    setFilters({ query: String(values.get("query") ?? "").trim(), offset: 0 });
   };
 
   return (
@@ -408,12 +453,12 @@ function StaffApplicantList({ token, onOpenApplication }: {
       <section className="workflow-panel" aria-labelledby="applicants-heading">
         <div className="workflow-panel-heading">
           <h3 id="applicants-heading">Абитуриенты</h3>
-          {rows && rows.length > 0 && <span className="workflow-count">{rows.length}</span>}
+          {rows && rows.length > 0 && <span className="workflow-count">{Math.min(rows.length, pageSize)}</span>}
         </div>
         <form className="workflow-queue-filter" onSubmit={applySearch}>
           <label>
             Поиск
-            <input name="query" defaultValue={query} placeholder="ФИО или email" />
+            <input name="query" defaultValue={filters.query} placeholder="ФИО или email" />
           </label>
           <button type="submit"><Icon name="search" /> Найти</button>
         </form>
@@ -435,7 +480,7 @@ function StaffApplicantList({ token, onOpenApplication }: {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
+                {rows.slice(0, pageSize).map((row) => {
                   const latest = row.applications.length > 0
                     ? row.applications.reduce((best, item) => item.updated_at > best.updated_at ? item : best)
                     : null;
@@ -470,6 +515,12 @@ function StaffApplicantList({ token, onOpenApplication }: {
             </table>
           </div>
         )}
+        <StaffListPagination offset={filters.offset} hasNext={(rows?.length ?? 0) > pageSize}
+          pending={rows === null} onPage={(offset) => {
+            setRows(null);
+            setSelected(null);
+            setFilters((current) => ({ ...current, offset }));
+          }} />
       </section>
       {selected !== null && <StaffApplicantCardView key={selected} token={token} applicantId={selected} onOpenApplication={onOpenApplication} />}
     </>
@@ -620,31 +671,51 @@ function verificationLabel(status: string, missing: string[], mismatched: string
 }
 
 function StaffAchievementsQueue({ token }: { token: string }) {
-  const [filters, setFilters] = useState({ status: "pending", category: "", q: "" });
+  const [filters, setFilters] = useState({ status: "pending", category: "", q: "", offset: 0 });
   const [items, setItems] = useState<AchievementItem[] | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
+  const [revision, setRevision] = useState(0);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let ignore = false;
-    setItems(null);
-    getStaffAchievements(token, filters).then((list) => {
-      if (!ignore) setItems(list);
+    setError("");
+    getStaffAchievements(token, { ...filters, limit: pageSize + 1 }).then((list) => {
+      if (ignore) return;
+      if (!list.length && filters.offset > 0) {
+        setItems(null);
+        setFilters((current) => ({ ...current, offset: current.offset - pageSize }));
+      } else {
+        setItems(list);
+      }
     }).catch((requestError) => {
-      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить очередь достижений"));
+      if (!ignore) {
+        setItems((current) => current ?? []);
+        setError(requestErrorMessage(requestError, "Не удалось загрузить очередь достижений"));
+      }
     });
     return () => { ignore = true; };
-  }, [token, filters]);
+  }, [token, filters, revision]);
 
   const applyFilters = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const values = new FormData(event.currentTarget);
     setSelected(null);
+    setItems(null);
     setFilters({
       status: String(values.get("status") ?? "pending"),
       category: String(values.get("category") ?? ""),
-      q: String(values.get("q") ?? "").trim()
+      q: String(values.get("q") ?? "").trim(),
+      offset: 0
     });
+  };
+
+  const updateReviewedItem = (updated: AchievementItem) => {
+    setItems((current) => current?.flatMap((item) => {
+      if (item.id !== updated.id) return [item];
+      return !filters.status || filters.status === updated.status ? [updated] : [];
+    }) ?? null);
+    setRevision((current) => current + 1);
   };
 
   return (
@@ -652,7 +723,7 @@ function StaffAchievementsQueue({ token }: { token: string }) {
       <section className="workflow-panel workflow-queue" aria-labelledby="achievements-heading">
         <div className="workflow-panel-heading">
           <h3 id="achievements-heading">Проверка индивидуальных достижений</h3>
-          {items && items.length > 0 && <span className="workflow-count">{items.length}</span>}
+          {items && items.length > 0 && <span className="workflow-count">{Math.min(items.length, pageSize)}</span>}
         </div>
         <form className="workflow-queue-filter" onSubmit={applyFilters}>
           <label>
@@ -683,13 +754,13 @@ function StaffAchievementsQueue({ token }: { token: string }) {
         </form>
         {error && <p className="error" role="alert">{error}</p>}
         {items === null && <p role="status" className="workflow-muted">Загружаем очередь достижений…</p>}
-        {items !== null && items.length === 0 && (
+        {!error && items !== null && items.length === 0 && (
           <WorkflowEmpty icon="file" title="Достигновений по этим условиям нет"
             description="Измените параметры поиска или дождитесь новых подач." />
         )}
         {items !== null && items.length > 0 && (
           <ul className="workflow-list workflow-queue-list">
-            {items.map((item) => (
+            {items.slice(0, pageSize).map((item) => (
               <li key={item.id}>
                 <button className="workflow-queue-row" type="button" aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
                   <span className="workflow-mark"><Icon name="badge" /></span>
@@ -704,13 +775,23 @@ function StaffAchievementsQueue({ token }: { token: string }) {
             ))}
           </ul>
         )}
+        <StaffListPagination offset={filters.offset} hasNext={(items?.length ?? 0) > pageSize}
+          pending={items === null} onPage={(offset) => {
+            setItems(null);
+            setSelected(null);
+            setFilters((current) => ({ ...current, offset }));
+          }} />
       </section>
-      {selected !== null && <StaffAchievementDetail key={selected} token={token} id={selected} />}
+      {selected !== null && <StaffAchievementDetail key={selected} token={token} id={selected} onReviewed={updateReviewedItem} />}
     </>
   );
 }
 
-function StaffAchievementDetail({ token, id }: { token: string; id: number }) {
+function StaffAchievementDetail({ token, id, onReviewed }: {
+  token: string;
+  id: number;
+  onReviewed: (updated: AchievementItem) => void;
+}) {
   const [card, setCard] = useState<StaffAchievementCard | null>(null);
   const [comment, setComment] = useState("");
   const [pending, setPending] = useState(false);
@@ -754,6 +835,7 @@ function StaffAchievementDetail({ token, id }: { token: string; id: number }) {
       const updated = await reviewAchievement(token, id, action, comment.trim());
       setCard(updated);
       setComment("");
+      onReviewed(updated);
     });
   };
 
@@ -859,20 +941,28 @@ function decisionLabel(action: string) {
   }
 }
 
-function StaffApplicationDetail({ token, id, onUpdate }: {
+function StaffApplicationDetail({ token, id, onUpdate, focusedDocumentId, onBack, onDocumentReviewed }: {
   token: string;
   id: number;
   onUpdate: (application: Application) => void;
+  focusedDocumentId?: number;
+  onBack?: () => void;
+  onDocumentReviewed?: () => void;
 }) {
   const [detail, setDetail] = useState<StaffApplication | null>(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
   const [preview, setPreview] = useState<{
-    url: string;
-    content_type: string;
+    url: string | null;
+    contentType: string;
     filename: string;
     text: string | null;
   } | null>(null);
+  const previewDialog = useRef<HTMLDialogElement>(null);
+  const previewTrigger = useRef<HTMLButtonElement>(null);
+  const previewRequest = useRef(0);
+  const focusedDocument = useRef<HTMLElement>(null);
+  const requestInProgress = useRef(false);
 
   useEffect(() => {
     let ignore = false;
@@ -886,7 +976,29 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
     return () => { ignore = true; };
   }, [token, id]);
 
+  const documentsLoaded = detail !== null;
+  useEffect(() => {
+    if (!documentsLoaded || focusedDocumentId === undefined) return;
+    focusedDocument.current?.focus({ preventScroll: true });
+    focusedDocument.current?.scrollIntoView({ block: "center" });
+  }, [documentsLoaded, focusedDocumentId]);
+
+  useEffect(() => {
+    return () => { previewRequest.current += 1; };
+  }, []);
+
+  useEffect(() => {
+    if (!preview) return;
+    const dialog = previewDialog.current;
+    if (dialog && !dialog.open) dialog.showModal();
+    return () => {
+      if (preview.url) URL.revokeObjectURL(preview.url);
+    };
+  }, [preview]);
+
   const run = async (task: () => Promise<void>) => {
+    if (requestInProgress.current) return;
+    requestInProgress.current = true;
     setError("");
     setPending(true);
     try {
@@ -894,23 +1006,21 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось выполнить действие по заявлению"));
     } finally {
+      requestInProgress.current = false;
       setPending(false);
     }
   };
 
+  const updateStatus = (status: ApplicationStatus, note: string) => run(async () => {
+    const changed = await reviewApplication(token, id, status, note);
+    onUpdate(changed);
+    setDetail(await getStaffApplication(token, id));
+  });
+
   const setStatus = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    return run(async () => {
-      const changed = await reviewApplication(
-        token,
-        id,
-        String(form.get("status")) as ApplicationStatus,
-        String(form.get("note") ?? "").trim()
-      );
-      onUpdate(changed);
-      setDetail(await getStaffApplication(token, id));
-    });
+    return updateStatus(String(form.get("status")) as ApplicationStatus, String(form.get("note") ?? "").trim());
   };
 
   const setDocumentStatus = (event: FormEvent<HTMLFormElement>, documentId: number) => {
@@ -925,6 +1035,7 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
     }
     return run(async () => {
       const updated = await reviewApplicationDocument(token, id, documentId, status, note);
+      onDocumentReviewed?.();
       setDetail((current) => current ? {
         ...current,
         documents: current.documents.map((document) => document.id === documentId ? updated : document)
@@ -933,34 +1044,33 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
     });
   };
 
-  const previewDocument = async (documentId: number, filename: string, contentType: string) => {
+  const previewDocument = async (documentId: number, filename: string, contentType: string, trigger: HTMLButtonElement) => {
+    if (requestInProgress.current) return;
+    requestInProgress.current = true;
+    previewTrigger.current = trigger;
+    const request = ++previewRequest.current;
     setError("");
     setPending(true);
     try {
       const file = await downloadApplicationDocument(token, id, documentId);
-      const blob = file.type ? file : new Blob([file], { type: contentType });
-      let text: string | null = null;
-      if (contentType.startsWith("text/") || contentType === "application/json") {
-        text = await file.text();
-      }
+      const mime = (file.type || contentType).split(";")[0].trim().toLowerCase();
+      const text = mime.startsWith("text/") || mime === "application/json" ? await file.text() : null;
+      if (request !== previewRequest.current) return;
+      const canShowFile = mime.startsWith("image/") || mime === "application/pdf";
       setPreview({
-        url: URL.createObjectURL(blob),
-        content_type: blob.type,
+        url: canShowFile ? URL.createObjectURL(file.type ? file : new Blob([file], { type: mime })) : null,
+        contentType: mime,
         filename,
         text,
       });
     } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось открыть файл"));
+      if (request === previewRequest.current) {
+        setError(requestErrorMessage(requestError, "Не удалось открыть файл"));
+      }
     } finally {
-      setPending(false);
+      requestInProgress.current = false;
+      if (request === previewRequest.current) setPending(false);
     }
-  };
-
-  const closePreview = () => {
-    setPreview((current) => {
-      if (current) URL.revokeObjectURL(current.url);
-      return null;
-    });
   };
 
   const download = (documentId: number, filename: string) => run(async () => {
@@ -1010,7 +1120,9 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
         <h4>Документы заявления</h4>
         {documents.length === 0 && <p className="workflow-muted">К заявлению не приложены документы.</p>}
         {documents.map((document) => (
-          <article className="workflow-document-review" key={document.id}>
+          <article className="workflow-document-review" key={document.id}
+            ref={document.id === focusedDocumentId ? focusedDocument : undefined}
+            aria-label={document.filename} tabIndex={document.id === focusedDocumentId ? -1 : undefined}>
             <div className="workflow-file-name">
               <span className="workflow-mark"><Icon name="file" /></span>
               <div>
@@ -1027,10 +1139,17 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
             </div>
             {document.review_message && <p className="workflow-muted">Комментарий: {document.review_message}</p>}
             <div className="workflow-actions">
-              <button className="workflow-secondary" type="button" disabled={pending} onClick={() => previewDocument(document.id, document.filename, document.content_type)}>Просмотреть файл</button>
+              <button className="workflow-secondary" type="button" disabled={pending} onClick={(event) =>
+                previewDocument(document.id, document.filename, document.content_type, event.currentTarget)}>Просмотреть файл</button>
               <button className="workflow-secondary" type="button" disabled={pending} onClick={() => download(document.id, document.filename)}>Скачать файл</button>
+              {document.id === focusedDocumentId && onBack && (
+                <button className="workflow-secondary" type="button" onClick={onBack}>К очереди документов</button>
+              )}
             </div>
             {document.extracted_text && <details className="workflow-disclosure"><summary>Извлечённый текст</summary><pre>{document.extracted_text}</pre></details>}
+            {application.status === "submitted" && document.id === focusedDocumentId && (
+              <button type="button" disabled={pending} onClick={() => updateStatus("under_review", "")}>Начать проверку заявления</button>
+            )}
             {application.status === "under_review" && (
               <form onSubmit={(event) => setDocumentStatus(event, document.id)}>
                 <div className="form-columns">
@@ -1053,6 +1172,10 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
           </article>
         ))}
       </section>
+      {application.status === "under_review" && documents.some((document) =>
+        document.status === "changes_requested" || document.status === "rejected") && (
+        <WorkflowNotice variant="info">Чтобы абитуриент мог заменить файл, выберите статус «{applicationStatus.needs_changes}» и сохраните заявление.</WorkflowNotice>
+      )}
       {statuses.length > 0 && (
         <form onSubmit={setStatus} key={application.status} className="workflow-subsection">
           <div className="form-columns">
@@ -1074,22 +1197,27 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
         <details className="workflow-disclosure"><summary>История заявления</summary><ApplicationHistory events={detail.history} /></details>
       )}
       {preview && (
-        <div className="workflow-document-preview" role="dialog" aria-modal="true" aria-label={`Просмотр файла ${preview.filename}`}>
+        <dialog ref={previewDialog} className="workflow-document-preview"
+          aria-label={`Просмотр файла ${preview.filename}`} onClose={() => {
+            setPreview(null);
+            previewTrigger.current?.focus();
+            previewTrigger.current = null;
+          }}>
           <div className="workflow-document-preview-heading">
             <div>
               <h4>{preview.filename}</h4>
-              <small>{preview.content_type}</small>
+              <small>{preview.contentType}</small>
             </div>
-            <button type="button" className="workflow-secondary" onClick={closePreview}>Закрыть</button>
+            <button type="button" className="workflow-secondary" onClick={() => previewDialog.current?.close()}>Закрыть</button>
           </div>
           {preview.text !== null
             ? <pre className="workflow-document-preview-text">{preview.text}</pre>
-            : preview.content_type.startsWith("image/")
+            : preview.url && preview.contentType.startsWith("image/")
               ? <img src={preview.url} alt={preview.filename} />
-              : preview.content_type === "application/pdf"
+              : preview.url && preview.contentType === "application/pdf"
                 ? <iframe src={preview.url} title={preview.filename} />
                 : <p className="workflow-muted">Предпросмотр недоступен для этого типа файла — скачайте его для просмотра.</p>}
-        </div>
+        </dialog>
       )}
     </section>
   );

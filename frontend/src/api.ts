@@ -242,8 +242,8 @@ export const uploadDocument = (token: string, file: File, documentType: string) 
   });
 };
 
-export const getStaffApplicants = (token: string, query: string) =>
-  apiRequest<StaffApplicantRow[]>(`/applicant/staff/applicants?limit=100&${query ? `q=${encodeURIComponent(query)}` : ""}`, {
+export const getStaffApplicants = (token: string, query: string, limit = 100, offset = 0) =>
+  apiRequest<StaffApplicantRow[]>(`/applicant/staff/applicants?${new URLSearchParams({ q: query, limit: String(limit), offset: String(offset) })}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
 

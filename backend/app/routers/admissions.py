@@ -137,7 +137,7 @@ def update_application(
         db.execute(
             update(ApplicationDocument)
             .where(ApplicationDocument.application_id == application.id)
-            .values(review_status=None, review_note=None)
+            .values(review_status=None, review_note=None, reviewed_at=None, reviewed_by=None)
         )
     for key, value in updates.items():
         setattr(application, key, value)
@@ -362,10 +362,10 @@ def review_staff_document(
     application_id: int, document_id: int, payload: StaffDocumentUpdate,
     current_user: Staff, db: Database,
 ) -> DocumentResponse:
-    if payload.status == "rejected" and not (payload.review_note or "").strip():
+    if payload.status in {"rejected", "changes_requested"} and not (payload.review_note or "").strip():
         raise HTTPException(
             status_code=422,
-            detail="Отклонение документа требует комментария",
+            detail="Для отклонения документа или запроса исправлений нужен комментарий",
         )
     application = _staff_application(db, application_id, lock=True)
     if application.status != "under_review":

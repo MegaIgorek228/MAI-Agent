@@ -23,7 +23,9 @@ const documentStatus: Record<string, string> = {
   changes_requested: "Запрошено исправление"
 };
 
-const commonDocumentTypes: { value: string; label: string }[] = [
+type DocumentTypeOption = { value: string; label: string };
+
+const commonDocumentTypes: DocumentTypeOption[] = [
   { value: "passport", label: "Паспорт" },
   { value: "education", label: "Документ об образовании (аттестат)" },
   { value: "Диплом", label: "Диплом" },
@@ -44,6 +46,40 @@ export function documentTypeLabel(type: string | null | undefined, titles?: Reco
   if (!type) return "Тип не указан";
   const known = titles?.[type] ?? documentTypeLabels[type.toLowerCase()];
   return known ?? type;
+}
+
+function DocumentTypeFields({ options, initialType = "", required = false, disabled }: {
+  options: DocumentTypeOption[];
+  initialType?: string;
+  required?: boolean;
+  disabled: boolean;
+}) {
+  const [selected, setSelected] = useState(initialType);
+  // This value belongs to the form only. Known choices are submitted by code.
+  const customValue = "__custom_document_type__";
+  return (
+    <>
+      <label>
+        Тип документа
+        <select name="document_type" value={selected} required={required} disabled={disabled}
+          onChange={(event) => setSelected(event.target.value)}>
+          <option value="" disabled={required}>{required ? "Выберите тип документа" : "Без типа"}</option>
+          {options.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
+          <option value={customValue}>Другой тип</option>
+        </select>
+      </label>
+      {selected === customValue && (
+        <label>
+          Введите тип документа
+          <input name="custom_document_type" maxLength={100} required disabled={disabled} />
+        </label>
+      )}
+    </>
+  );
+}
+
+function selectedDocumentType(values: FormData) {
+  return String(values.get("custom_document_type") ?? values.get("document_type") ?? "").trim();
 }
 
 export function documentStatusLabel(status: string) {
@@ -132,8 +168,9 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [pickedFile, setPickedFile] = useState<File | null>(null);
+  const [uploadReset, setUploadReset] = useState(0);
   const [showTypes, setShowTypes] = useState<Record<number, boolean>>({});
-  const [configuredTypes, setConfiguredTypes] = useState<{ value: string; label: string }[]>([]);
+  const [configuredTypes, setConfiguredTypes] = useState<DocumentTypeOption[]>([]);
 
   useEffect(() => {
     let ignore = false;
@@ -154,15 +191,15 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
   // choice like «Паспорт» is stored as the code the published rule expects.
   // Rules win over the common list; first occurrence wins (Map keeps the LAST
   // entry for a duplicate key, so build the map with explicit first-wins).
-  const typeTitles: Record<string, string> = Object.fromEntries(configuredTypes.map((item) => [item.value, item.label]));
-  const typeOptionMap = new Map<string, { value: string; label: string }>();
+  const typeOptionMap = new Map<string, DocumentTypeOption>();
   for (const item of [...configuredTypes, ...commonDocumentTypes,
     ...documents.flatMap((doc) => doc.document_type
-      ? [{ value: doc.document_type, label: typeTitles[doc.document_type] ?? doc.document_type }]
+      ? [{ value: doc.document_type, label: documentTypeLabel(doc.document_type) }]
       : [])]) {
     if (!typeOptionMap.has(item.value)) typeOptionMap.set(item.value, item);
   }
   const documentTypeOptions = [...typeOptionMap.values()];
+  const typeTitles = Object.fromEntries(documentTypeOptions.map(({ value, label }) => [value, label]));
 
   const run = async (task: () => Promise<void>) => {
     setError("");
@@ -183,17 +220,18 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
     const file = values.get("file");
     if (!(file instanceof File) || !file.name) return;
     await run(async () => {
-      const document = await uploadDocument(token, file, String(values.get("document_type") ?? "").trim());
+      const document = await uploadDocument(token, file, selectedDocumentType(values));
       replaceDocument(document);
       setCompleteness(null);
       form.reset();
+      setUploadReset((version) => version + 1);
       setPickedFile(null);
     });
   };
 
   const updateType = async (event: FormEvent<HTMLFormElement>, document: DocumentItem) => {
     event.preventDefault();
-    const value = String(new FormData(event.currentTarget).get("document_type") ?? "").trim();
+    const value = selectedDocumentType(new FormData(event.currentTarget));
     await run(async () => {
       replaceDocument(await updateDocumentType(token, document.id, value || null));
       setCompleteness(null);
@@ -222,12 +260,7 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
             <h3 id="upload-heading">Новый документ</h3>
           </div>
           <form onSubmit={upload}>
-            <label>
-              Тип документа
-              <select name="document_type" required disabled={pending}>
-                {documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-              </select>
-            </label>
+            <DocumentTypeFields key={uploadReset} options={documentTypeOptions} required disabled={pending} />
             <label className="workflow-dropzone">
               <span className="workflow-mark"><Icon name="upload" /></span>
               <span className="workflow-dropzone-copy">
@@ -298,13 +331,8 @@ export function Documents({ token, documents, replaceDocument }: DocumentsProps)
                 {document.analysis_error && <p className="error">{document.analysis_error}</p>}
                 {showTypes[document.id] && (
                   <form className="workflow-inline-form" onSubmit={(event) => updateType(event, document)}>
-                    <label>
-                      Тип документа
-                      <select name="document_type" defaultValue={document.document_type ?? ""} disabled={pending}>
-                        <option value="">Без типа</option>
-                        {documentTypeOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-                      </select>
-                    </label>
+                    <DocumentTypeFields options={documentTypeOptions} initialType={document.document_type ?? ""}
+                      disabled={pending} />
                     <button type="submit" disabled={pending}>Сохранить тип</button>
                   </form>
                 )}

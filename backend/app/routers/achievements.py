@@ -22,6 +22,7 @@ from app.achievement_schemas import (
     AchievementDocument,
     AchievementResponse,
     AchievementReviewResponse,
+    AchievementStatus,
     AchievementUpdate,
     StaffAchievementApplicant,
     StaffAchievementResponse,
@@ -104,8 +105,9 @@ def get_my_achievement_history(
 def list_staff_achievements(
     current_user: Staff,
     db: Database,
+    status_filter: Annotated[AchievementStatus | None, Query(alias="status")] = None,
     ach_status: Annotated[
-        str | None, Query(pattern=r"^(draft|pending|confirmed|rejected|needs_revision)$")
+        AchievementStatus | None, Query(deprecated=True)
     ] = None,
     category: Annotated[str | None, Query(max_length=32)] = None,
     q: Annotated[str | None, Query(max_length=255)] = None,
@@ -113,7 +115,7 @@ def list_staff_achievements(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[AchievementResponse]:
     items = staff_achievement_queue(
-        db, status=ach_status, category=category, query=q, limit=limit, offset=offset,
+        db, status=status_filter or ach_status, category=category, query=q, limit=limit, offset=offset,
     )
     return achievement_responses(db, items)
 

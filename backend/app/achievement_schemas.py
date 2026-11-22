@@ -9,7 +9,7 @@ admission rules.
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AchievementCategory = Literal["olympiad", "sport", "gto", "volunteering", "creative", "other"]
 AchievementLevel = Literal["school", "municipal", "regional", "national", "international"]
@@ -49,6 +49,13 @@ class AchievementUpdate(BaseModel):
     description: Description = None
     application_id: Annotated[int | None, Field(gt=0)] = None
     document_id: Annotated[int | None, Field(gt=0)] = None
+
+    @field_validator("category", "title", "achieved_on", mode="before")
+    @classmethod
+    def reject_null_required_fields(cls, value: object) -> object:
+        if value is None:
+            raise ValueError("This field cannot be null")
+        return value
 
 
 class AchievementDocument(BaseModel):

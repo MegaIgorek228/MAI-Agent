@@ -2,9 +2,12 @@ import json
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from app.admissions_schemas import SyntheticCandidateInput, SyntheticEgeInput
 from app.db import SessionLocal
-from app.synthetic_ege_registry import load_candidates, load_results
+from app.models import SyntheticEgeCandidate, SyntheticEgeResult
+from app.synthetic_ege_registry import load_candidates, load_fixture, load_results
 from test_applicant_features import auth_headers
 
 APPLICATION = {"campaign_year": 2026, "program": "09.03.01", "admission_basis": "ЕГЭ"}
@@ -73,16 +76,56 @@ def test_loaders_are_idempotent_and_reject_conflicts(client):
     except ValueError:
         pass
     with SessionLocal() as db:
-        from app.models import SyntheticEgeCandidate
-
         person = db.get(SyntheticEgeCandidate, "SYN-1001")
         assert person.full_name == "Алексей Иванович Иванов"
 
 
-def test_unique_match_found_case_and_whitespace_insensitive(client):
+def test_fixture_conflict_rolls_back_people_and_results(client):
+    seed_registry(client)
+    incoming = SyntheticCandidateInput(
+        candidate_id="SYN-NEW", full_name="Тестов Тест Тестович", date_of_birth="2009-01-01",
+    )
+    added_score = SyntheticEgeInput(
+        candidate_id=incoming.candidate_id, subject="физика", year=2026, score=70,
+    )
+    conflicting_score = SyntheticEgeInput(
+        candidate_id="SYN-1001", subject="физика", year=2026, score=79,
+    )
+    with SessionLocal() as db:
+        with pytest.raises(ValueError, match="already defined with a different result"):
+            load_fixture(db, [incoming], [added_score, conflicting_score])
+        assert db.get(SyntheticEgeCandidate, incoming.candidate_id) is None
+        assert db.get(SyntheticEgeResult, (incoming.candidate_id, "физика", 2026)) is None
+        assert db.get(SyntheticEgeResult, ("SYN-1001", "физика", 2026)).score == 100
+
+
+def test_fixture_can_replace_existing_values_only_when_requested(client):
+    seed_registry(client)
+    updated = SyntheticCandidateInput(
+        candidate_id="SYN-1001", full_name="Тестов Тест Тестович", date_of_birth="2009-01-01",
+    )
+    updated_score = SyntheticEgeInput(
+        candidate_id=updated.candidate_id, subject="физика", year=2026, score=79,
+    )
+    duplicate = updated_score.model_copy(update={"score": 81})
+    with SessionLocal() as db:
+        with pytest.raises(ValueError, match="Conflicting synthetic fixture"):
+            load_fixture(db, [updated], [updated_score, duplicate], replace_conflicts=True)
+        assert load_fixture(db, [updated], [updated_score], replace_conflicts=True) == ((0, 1), (0, 1))
+        assert load_fixture(db, [updated], [updated_score], replace_conflicts=True) == ((0, 0), (0, 0))
+        assert db.get(SyntheticEgeCandidate, updated.candidate_id).full_name == updated.full_name
+        assert db.get(SyntheticEgeResult, (updated.candidate_id, "физика", 2026)).score == 79
+        assert db.get(SyntheticEgeResult, (updated.candidate_id, "русский язык", 2026)).score == 88
+
+
+@pytest.mark.parametrize("full_name", [
+    "  алексей    иВАНОВИЧ   иВАНОВ ",
+    "  иВАНОВ алексей    иВАНОВИЧ ",
+])
+def test_unique_match_found_case_and_whitespace_insensitive(client, full_name):
     seed_registry(client)
     headers = auth_headers(client)
-    response = search(client, headers, "  алексей    иВАНОВИЧ   иВАНОВ ", "2008-03-14")
+    response = search(client, headers, full_name, "2008-03-14")
     assert response.status_code == 200
     body = response.json()
     assert body["match_count"] == 1
@@ -104,17 +147,16 @@ def test_no_match_is_reported(client):
     assert body["ambiguous"] is False
 
 
-def test_ambiguous_match_is_reported_not_resolved(client):
+@pytest.mark.parametrize("full_name", ["Тестов Тест Тестович", "Тест Тестович Тестов"])
+def test_ambiguous_match_is_reported_not_resolved(client, full_name):
     seed_registry(client)
     # The reference fixture keeps unique identities; the ambiguity case is
     # created directly in the test database (two distinct candidates, same
     # full name and date of birth).
     with SessionLocal() as db:
-        from app.models import SyntheticEgeCandidate, SyntheticEgeResult
-
         db.add_all([
-            SyntheticEgeCandidate(candidate_id="SYN-2001", full_name="Тест Тестов", date_of_birth=date(2005, 1, 1)),
-            SyntheticEgeCandidate(candidate_id="SYN-2002", full_name="Тест Тестов", date_of_birth=date(2005, 1, 1)),
+            SyntheticEgeCandidate(candidate_id="SYN-2001", full_name="Тестов Тест Тестович", date_of_birth=date(2005, 1, 1)),
+            SyntheticEgeCandidate(candidate_id="SYN-2002", full_name="Тест Тестович Тестов", date_of_birth=date(2005, 1, 1)),
         ])
         db.add_all([
             SyntheticEgeResult(candidate_id="SYN-2001", subject="Русский язык", year=2025, score=70),
@@ -122,7 +164,7 @@ def test_ambiguous_match_is_reported_not_resolved(client):
         ])
         db.commit()
     headers = auth_headers(client)
-    body = search(client, headers, "Тест Тестов", "2005-01-01").json()
+    body = search(client, headers, full_name, "2005-01-01").json()
     assert body["match_count"] == 2
     assert body["ambiguous"] is True
     assert {match["candidate_id"] for match in body["matches"]} == {"SYN-2001", "SYN-2002"}
@@ -186,6 +228,27 @@ def test_confirm_rejects_unknown_candidate(client):
         json={"candidate_id": "SYN-9999"},
     )
     assert unknown.status_code == 404
+
+
+def test_confirm_rejects_oversized_result_set_without_replacing_saved_scores(client):
+    seed_registry(client)
+    headers = auth_headers(client)
+    application_id = create_application(client, headers)
+    base = f"/applicant/applications/{application_id}/ege"
+    confirmed = client.post(f"{base}/synthetic-confirm", headers=headers, json={"candidate_id": "SYN-1001"})
+    assert confirmed.status_code == 200
+
+    with SessionLocal() as db:
+        load_results(db, [
+            SyntheticEgeInput(
+                candidate_id="SYN-1002", subject=f"Предмет {index}", year=2026, score=80,
+            )
+            for index in range(61)
+        ])
+
+    rejected = client.post(f"{base}/synthetic-confirm", headers=headers, json={"candidate_id": "SYN-1002"})
+    assert rejected.status_code == 422
+    assert client.get(base, headers=headers).json() == confirmed.json()
 
 
 def test_confirm_rejects_submitted_application(client):

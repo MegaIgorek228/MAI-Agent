@@ -472,6 +472,7 @@ function ExamScoreEditor({ token, applicationId, defaultYear, canEdit, onDirty, 
     setMessage("");
     try {
       showScores(await refreshExamScores(token, applicationId, syntheticId.trim().toUpperCase()));
+      onSaved();
       setMessage("Баллы обновлены из тестового реестра.");
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось обновить результаты из реестра"));

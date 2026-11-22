@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from acp.schema import LoadSessionResponse
 
 from app import hermes_client
 
@@ -21,28 +22,31 @@ class Process:
 
 
 class Connection:
-    def __init__(self):
+    def __init__(self, load_response=None, stop_reason="end_turn"):
         self.closed = False
-        self.prompts = 0
+        self.prompts = []
+        self.load_response = load_response
+        self.stop_reason = stop_reason
 
     async def initialize(self, **kwargs):
         return None
 
     async def load_session(self, **kwargs):
-        return None
+        return self.load_response
 
     async def new_session(self, **kwargs):
         return SimpleNamespace(session_id="new-session")
 
     async def prompt(self, **kwargs):
-        self.prompts += 1
-        return SimpleNamespace(stop_reason="end_turn")
+        self.prompts.append(kwargs["prompt"][0].text)
+        return SimpleNamespace(stop_reason=self.stop_reason)
 
     async def close(self):
         self.closed = True
 
 
-def test_missing_stored_session_reopens_and_empty_turn_is_not_replayed(monkeypatch):
+@pytest.mark.parametrize("load_response", [None, LoadSessionResponse()])
+def test_missing_stored_session_reopens_and_empty_refusal_is_not_replayed(monkeypatch, load_response):
     processes, connections = [], []
 
     async def spawn(*args, **kwargs):
@@ -51,19 +55,20 @@ def test_missing_stored_session_reopens_and_empty_turn_is_not_replayed(monkeypat
         return process
 
     def connect(*args, **kwargs):
-        connection = Connection()
+        connection = Connection(load_response, "refusal")
         connections.append(connection)
         return connection
 
     monkeypatch.setattr(hermes_client.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(hermes_client, "connect_to_agent", connect)
     monkeypatch.setattr(hermes_client, "create_trusted_context_for_session", lambda *_: "trusted")
-    monkeypatch.setattr(hermes_client, "_with_conversation_history", lambda _, __, text: text)
+    monkeypatch.setattr(hermes_client, "_with_conversation_history", lambda _, __, text: f"history {text}")
     manager = hermes_client.HermesClientManager()
 
     async def scenario():
         assert await manager.prompt(1, 1, "purged-session", "sample") == ("", "new-session")
-        assert [connection.prompts for connection in connections] == [0, 1]
+        assert await manager.prompt(1, 1, "new-session", "follow-up") == ("", "new-session")
+        assert [connection.prompts for connection in connections] == [[], ["history sample", "follow-up"]]
         assert connections[0].closed and processes[0].returncode == 0
         assert manager._locks == {}
         await manager.close_all()

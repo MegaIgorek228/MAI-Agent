@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 from hashlib import sha256
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, defer
 
@@ -39,6 +40,7 @@ from app.models import (
 from app.schemas import DocumentResponse
 
 EDITABLE_STATUSES = {"draft", "needs_changes"}
+DOCUMENT_REVIEW_QUEUE_STATUSES = ("submitted", "under_review")
 STAFF_TRANSITIONS = {
     "submitted": {"under_review", "needs_changes"},
     "under_review": {"needs_changes", "reviewed"},
@@ -235,28 +237,36 @@ def normalize_full_name(value: str) -> str:
     return " ".join(value.split()).casefold()
 
 
+def alternate_full_name_order(value: str) -> str | None:
+    parts = value.split()
+    if len(parts) != 3:
+        return None
+    return " ".join((*parts[1:], parts[0]))
+
+
 def search_synthetic_candidates(
     db: Session, full_name: str, date_of_birth: date
 ) -> SyntheticEgeSearchResponse:
     """Look the person up in the synthetic registry by full name and date of birth.
 
-    Case- and whitespace-insensitive name comparison; exact date of birth.
-    Returns 0, 1 or several matches — ambiguity is reported, never resolved
-    by guessing a record.
+    Compare names ignoring case and extra whitespace, with an exact date of
+    birth. Accept surname-first names and the fixture's given-name-first
+    format for three-part names. Report all matches if several rows qualify.
     """
     needle = normalize_full_name(full_name)
     if not needle:
         raise HTTPException(status_code=422, detail="Full name is required")
+    alternate = alternate_full_name_order(needle)
     candidates = db.scalars(
         select(SyntheticEgeCandidate).where(
             SyntheticEgeCandidate.date_of_birth == date_of_birth
         )
     )
-    matched = [
-        candidate
-        for candidate in candidates
-        if normalize_full_name(candidate.full_name) == needle
-    ]
+    matched = []
+    for candidate in candidates:
+        name = normalize_full_name(candidate.full_name)
+        if name in (needle, alternate) or alternate_full_name_order(name) == needle:
+            matched.append(candidate)
     matches = [
         SyntheticEgeMatch(
             candidate_id=item.candidate_id,
@@ -309,24 +319,19 @@ def bind_synthetic_results(
         raise HTTPException(
             status_code=422, detail="Registry result year cannot exceed the campaign year"
         )
-    requested = {(row.subject, row.year): row.score for row in rows}
-    existing = {(row.subject, row.year): row for row in ordered_scores(db, application.id)}
-    if (
-        requested == {key: row.score for key, row in existing.items()}
-        and application.synthetic_candidate_id == candidate_id
-    ):
-        return
-    for key, row in existing.items():
-        if key in requested:
-            row.score = requested.pop(key)
-        else:
-            db.delete(row)
-    db.add_all([
-        EgeScore(application_id=application.id, subject=subject, year=year, score=score)
-        for (subject, year), score in requested.items()
-    ])
-    application.synthetic_candidate_id = candidate_id
-    application.scores_revision += 1
+    try:
+        payload = EgeInput(
+            synthetic_candidate_id=candidate_id,
+            scores=[
+                EgeScoreInput(subject=row.subject, year=row.year, score=row.score)
+                for row in rows
+            ],
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=422, detail="Registry results do not fit the application's exam score limits"
+        ) from exc
+    replace_scores(db, application, payload)
 
 
 def verify_ege(db: Session, application: Application) -> EgeResponse:
@@ -389,7 +394,7 @@ def application_documents(db: Session, application: Application) -> list[Documen
         DocumentResponse.model_validate(document).model_copy(update={
             "status": link.review_status or document.status,
             "review_message": link.review_note if link.review_status else document.review_message,
-            "reviewed_at": link.reviewed_at,
+            "reviewed_at": link.reviewed_at if link.review_status else None,
         })
         for document, link in db.execute(
             select(Document, ApplicationDocument)
@@ -412,7 +417,10 @@ def staff_application_response(db: Session, application: Application) -> StaffAp
         for document_id, reviewer in db.execute(
             select(Document.id, ApplicationDocument.reviewed_by)
             .join(ApplicationDocument, ApplicationDocument.document_id == Document.id)
-            .where(ApplicationDocument.application_id == application.id)
+            .where(
+                ApplicationDocument.application_id == application.id,
+                ApplicationDocument.review_status.is_not(None),
+            )
         )
     }
     reviewer_ids = {value for value in reviewed_by.values() if value is not None}
@@ -449,8 +457,8 @@ def staff_document_queue(
     """Cross-application document review queue.
 
     ``review_status`` accepts a concrete link status (``accepted``,
-    ``rejected``, ``changes_requested``) or ``pending`` for documents that
-    have no decision yet. ``q`` searches the applicant by email or name.
+    ``rejected``, ``changes_requested``) or ``pending`` for undecided documents
+    in applications available for review. ``q`` searches by email or name.
     """
     query = (
         select(
@@ -478,7 +486,10 @@ def staff_document_queue(
         .where(Application.status != "draft")
     )
     if review_status == "pending":
-        query = query.where(ApplicationDocument.review_status.is_(None))
+        query = query.where(
+            ApplicationDocument.review_status.is_(None),
+            Application.status.in_(DOCUMENT_REVIEW_QUEUE_STATUSES),
+        )
     elif review_status:
         query = query.where(ApplicationDocument.review_status == review_status)
     if q and q.strip():
@@ -493,7 +504,7 @@ def staff_document_queue(
     ).offset(offset).limit(limit)))
     if not rows:
         return []
-    reviewer_ids = {row.reviewed_by for row in rows if row.reviewed_by is not None}
+    reviewer_ids = {row.reviewed_by for row in rows if row.review_status and row.reviewed_by is not None}
     reviewers = (
         {user.id: user.email for user in db.scalars(select(User).where(User.id.in_(reviewer_ids)))}
         if reviewer_ids
@@ -514,8 +525,8 @@ def staff_document_queue(
             document_created_at=row.document_created_at,
             review_status=row.review_status,
             review_note=row.review_note,
-            reviewed_at=row.reviewed_at,
-            reviewer=reviewers.get(row.reviewed_by) if row.reviewed_by is not None else None,
+            reviewed_at=row.reviewed_at if row.review_status else None,
+            reviewer=reviewers.get(row.reviewed_by) if row.review_status else None,
         )
         for row in rows
     ]

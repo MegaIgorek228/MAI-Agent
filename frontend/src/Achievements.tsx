@@ -140,7 +140,7 @@ export function Achievements({ token }: { token: string }) {
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!form || busy) return;
+    if (!form || busy || uploading) return;
     setBusy(true);
     setError("");
     setMessage("");
@@ -191,7 +191,7 @@ export function Achievements({ token }: { token: string }) {
   };
 
   const attachFile = async (file: File) => {
-    if (!form || uploading) return;
+    if (!form || busy || uploading) return;
     setUploading(true);
     setError("");
     try {
@@ -208,7 +208,7 @@ export function Achievements({ token }: { token: string }) {
   return (
     <div className="workflow">
       <WorkflowHeader level={1} title="Индивидуальные достижения"
-        description="Олимпиады, спорт, ГТО, волонтёрство и творческие достижения. Подтверждённые сотрудником достижения учитываются при поступлении по правилам приёма.">
+        description="Олимпиады, спорт, ГТО, волонтёрство и творческие достижения. Сведения проверяет сотрудник приёмной комиссии.">
         <button type="button" onClick={openCreate} disabled={form !== null}><Icon name="plus" /> Добавить достижение</button>
       </WorkflowHeader>
 
@@ -271,7 +271,7 @@ export function Achievements({ token }: { token: string }) {
                 onChange={(event) => setForm((current) => current && { ...current, description: event.target.value })} />
             </label>
             <div>
-              <h4>Подтверждающий документ</h4>
+              <h4>Подтверждающий документ (необязательно)</h4>
               <div className="form-columns">
                 <label>
                   Документ из загруженных
@@ -280,13 +280,13 @@ export function Achievements({ token }: { token: string }) {
                     documentId: event.target.value,
                     documentName: documents.find((document) => String(document.id) === event.target.value)?.filename ?? ""
                   })}>
-                    <option value="">Без документа (нужен для отправки на проверку)</option>
+                    <option value="">Без документа</option>
                     {documents.map((document) => <option key={document.id} value={document.id}>{document.filename}</option>)}
                   </select>
                 </label>
                 <label>
                   Или загрузить файл
-                  <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx" disabled={uploading}
+                  <input type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx" disabled={busy || uploading}
                     onChange={(event) => { const file = event.target.files?.[0]; if (file) void attachFile(file); event.target.value = ""; }} />
                 </label>
               </div>
@@ -294,8 +294,8 @@ export function Achievements({ token }: { token: string }) {
               {uploading && <p role="status" className="workflow-muted">Загружаем файл…</p>}
             </div>
             <div className="workflow-actions">
-              <button type="submit" disabled={busy}>{busy ? "Сохраняем…" : (editingId === null ? "Сохранить черновик" : "Сохранить изменения")}</button>
-              <button className="workflow-secondary" type="button" disabled={busy} onClick={() => { setForm(null); setEditingId(null); }}>Отмена</button>
+              <button type="submit" disabled={busy || uploading}>{busy ? "Сохраняем…" : (editingId === null ? "Сохранить черновик" : "Сохранить изменения")}</button>
+              <button className="workflow-secondary" type="button" disabled={busy || uploading} onClick={() => { setForm(null); setEditingId(null); }}>Отмена</button>
             </div>
           </form>
         </section>
@@ -309,7 +309,7 @@ export function Achievements({ token }: { token: string }) {
         {items === null && <p role="status" className="workflow-muted">Загрузка достижений…</p>}
         {items !== null && items.length === 0 && (
           <WorkflowEmpty icon="file" title="Достижений пока нет"
-            description="Добавьте первое достижение: заполните сведения, прикрепите подтверждающий документ и отправьте на проверку." />
+            description="Заполните сведения о достижении и отправьте его на проверку. Подтверждающий файл можно приложить к черновику." />
         )}
         {items !== null && items.length > 0 && (
           <ul className="workflow-achievement-list">
@@ -338,17 +338,17 @@ export function Achievements({ token }: { token: string }) {
                 <div className="workflow-actions">
                   {(item.status === "draft" || item.status === "rejected" || item.status === "needs_revision") && (
                     <>
-                      <button className="workflow-secondary" type="button" disabled={busy} onClick={() => openEdit(item)}>
+                      <button className="workflow-secondary" type="button" disabled={busy || uploading} onClick={() => openEdit(item)}>
                         Изменить
                       </button>
-                      <button type="button" disabled={busy || !item.document} title={!item.document ? "Сначала приложите подтверждающий документ" : undefined}
+                      <button type="button" disabled={busy || uploading}
                         onClick={() => sendToReview(item.id)}>
                         {item.status === "draft" ? "Отправить на проверку" : "Повторно подать на проверку"}
                       </button>
                     </>
                   )}
                   {item.status === "pending" && <span className="workflow-muted">Ожидаем решение сотрудника приёмной комиссии.</span>}
-                  {item.status === "confirmed" && <span className="workflow-muted">Достижение подтверждено и учитывается по правилам приёма.</span>}
+                  {item.status === "confirmed" && <span className="workflow-muted">Достижение подтверждено сотрудником приёмной комиссии.</span>}
                 </div>
               </li>
             ))}

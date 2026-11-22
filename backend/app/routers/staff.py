@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.achievement_schemas import (
@@ -23,7 +23,7 @@ from app.achievement_schemas import (
     StaffDashboard,
 )
 from app.achievement_service import applicant_achievements, achievement_responses
-from app.admissions_service import ege_response, ordered_scores
+from app.admissions_service import DOCUMENT_REVIEW_QUEUE_STATUSES, ege_response, ordered_scores
 from app.db import get_db
 from app.dependencies import require_roles
 from app.models import (
@@ -61,7 +61,7 @@ def staff_dashboard(current_user: Staff, db: Database) -> StaffDashboard:
         .join(Application, Application.id == ApplicationDocument.application_id)
         .where(
             ApplicationDocument.review_status.is_(None),
-            Application.status != "draft",
+            Application.status.in_(DOCUMENT_REVIEW_QUEUE_STATUSES),
         )
     ) or 0
     achievements_awaiting_review = db.scalar(
@@ -153,18 +153,18 @@ def staff_applicants(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[StaffApplicantRow]:
     """Applicant directory with search (name or email) and application data."""
-    from sqlalchemy import or_
-
     query = select(User).where(User.role == UserRole.applicant.value)
-    if q and q.strip():
-        term = f"%{q.strip()}%"
+    if q and (words := q.split()):
         profile_match = select(ApplicantProfile.user_id).where(
-            or_(
-                ApplicantProfile.first_name.ilike(term),
-                ApplicantProfile.last_name.ilike(term),
+            *(
+                or_(
+                    ApplicantProfile.first_name.icontains(word, autoescape=True),
+                    ApplicantProfile.last_name.icontains(word, autoescape=True),
+                )
+                for word in words
             )
         )
-        query = query.where(or_(User.email.ilike(term), User.id.in_(profile_match)))
+        query = query.where(or_(User.email.icontains(q.strip(), autoescape=True), User.id.in_(profile_match)))
     users = list(db.scalars(query.order_by(User.id).offset(offset).limit(limit)))
     if not users:
         return []

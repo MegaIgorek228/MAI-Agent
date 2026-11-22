@@ -1118,11 +1118,19 @@
 }
 
 .workflow-document-preview {
-  margin-top: 18px;
+  width: min(56rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  overflow: auto;
   border: 1px solid #c9cdc5;
   border-radius: 10px;
   padding: 14px 16px;
   background: #fbfbf9;
+  color: var(--ink);
+}
+
+.workflow-document-preview::backdrop {
+  background: rgb(29 40 48 / 58%);
 }
 
 .workflow-document-preview-heading {
