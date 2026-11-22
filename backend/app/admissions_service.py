@@ -1,6 +1,6 @@
 import json
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 
 from fastapi import HTTPException
@@ -18,6 +18,8 @@ from app.admissions_schemas import (
     RequirementsResponse,
     StaffApplicantResponse,
     StaffApplicationResponse,
+    SyntheticEgeMatch,
+    SyntheticEgeSearchResponse,
 )
 from app.document_service import document_checklist
 from app.models import (
@@ -28,6 +30,7 @@ from app.models import (
     Document,
     EgeScore,
     EgeVerification,
+    SyntheticEgeCandidate,
     SyntheticEgeResult,
     User,
 )
@@ -223,6 +226,104 @@ def replace_scores(db: Session, application: Application, payload: EgeInput) -> 
         for (subject, year), score in requested.items()
     ])
     application.synthetic_candidate_id = payload.synthetic_candidate_id
+    application.scores_revision += 1
+
+
+def normalize_full_name(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def search_synthetic_candidates(
+    db: Session, full_name: str, date_of_birth: date
+) -> SyntheticEgeSearchResponse:
+    """Look the person up in the synthetic registry by full name and date of birth.
+
+    Case- and whitespace-insensitive name comparison; exact date of birth.
+    Returns 0, 1 or several matches — ambiguity is reported, never resolved
+    by guessing a record.
+    """
+    needle = normalize_full_name(full_name)
+    if not needle:
+        raise HTTPException(status_code=422, detail="Full name is required")
+    candidates = db.scalars(
+        select(SyntheticEgeCandidate).where(
+            SyntheticEgeCandidate.date_of_birth == date_of_birth
+        )
+    )
+    matched = [
+        candidate
+        for candidate in candidates
+        if normalize_full_name(candidate.full_name) == needle
+    ]
+    matches = [
+        SyntheticEgeMatch(
+            candidate_id=item.candidate_id,
+            full_name=item.full_name,
+            date_of_birth=item.date_of_birth,
+            results=[
+                EgeScoreInput(subject=row.subject, year=row.year, score=row.score)
+                for row in db.scalars(
+                    select(SyntheticEgeResult)
+                    .where(
+                        SyntheticEgeResult.candidate_id == item.candidate_id,
+                        SyntheticEgeResult.status == "valid",
+                    )
+                    .order_by(SyntheticEgeResult.subject, SyntheticEgeResult.year.desc())
+                )
+            ],
+        )
+        for item in sorted(matched, key=lambda candidate: candidate.candidate_id)
+    ]
+    return SyntheticEgeSearchResponse(
+        match_count=len(matches), ambiguous=len(matches) > 1, matches=matches,
+    )
+
+
+def bind_synthetic_results(
+    db: Session, application: Application, candidate_id: str
+) -> None:
+    """Bind the registry's results for a confirmed candidate to the application.
+
+    Only values read from the immutable registry are written: the caller can
+    never supply scores here. Rebinding the same candidate is a no-op.
+    """
+    ensure_editable(application)
+    candidate = db.get(SyntheticEgeCandidate, candidate_id)
+    if candidate is None:
+        raise HTTPException(
+            status_code=404, detail="Candidate not found in the synthetic registry"
+        )
+    rows = list(db.scalars(
+        select(SyntheticEgeResult).where(
+            SyntheticEgeResult.candidate_id == candidate_id,
+            SyntheticEgeResult.status == "valid",
+        )
+    ))
+    if not rows:
+        raise HTTPException(
+            status_code=422, detail="Candidate has no valid results in the registry"
+        )
+    if any(row.year > application.campaign_year for row in rows):
+        raise HTTPException(
+            status_code=422, detail="Registry result year cannot exceed the campaign year"
+        )
+    requested = {(row.subject, row.year): row.score for row in rows}
+    existing = {(row.subject, row.year): row for row in ordered_scores(db, application.id)}
+    if (
+        requested == {key: row.score for key, row in existing.items()}
+        and application.synthetic_candidate_id == candidate_id
+    ):
+        return
+    for key, row in existing.items():
+        if key in requested:
+            row.score = requested.pop(key)
+        else:
+            db.delete(row)
+    db.add_all([
+        EgeScore(application_id=application.id, subject=subject, year=year, score=score)
+        for (subject, year), score in requested.items()
+    ])
+    application.synthetic_candidate_id = candidate_id
     application.scores_revision += 1
 
 

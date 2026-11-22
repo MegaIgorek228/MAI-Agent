@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 from urllib.parse import quote
 
@@ -22,6 +22,8 @@ from app.admissions_schemas import (
     StaffApplicationResponse,
     StaffDocumentUpdate,
     StaffStatusUpdate,
+    SyntheticEgeConfirmInput,
+    SyntheticEgeSearchResponse,
 )
 from app.admissions_service import (
     STAFF_TRANSITIONS,
@@ -29,12 +31,14 @@ from app.admissions_service import (
     application_for,
     application_history,
     application_responses,
+    bind_synthetic_results,
     ege_response,
     ensure_editable,
     matching_rule,
     ordered_scores,
     replace_scores,
     requirements_for,
+    search_synthetic_candidates,
     set_application_documents,
     staff_application_response,
     transition,
@@ -74,6 +78,39 @@ def create_application(
     transition(db, application, current_user.id, "draft")
     db.commit()
     return application_responses(db, [application])[0]
+
+
+@router.get("/synthetic-ege/search", response_model=SyntheticEgeSearchResponse)
+def search_synthetic_ege(
+    current_user: Applicant,
+    db: Database,
+    full_name: Annotated[str, Query(min_length=2, max_length=255)],
+    date_of_birth: date,
+) -> SyntheticEgeSearchResponse:
+    """Read-only lookup of the synthetic EGE registry by full name and date of birth.
+
+    The registry itself is reference data: this endpoint (and the MCP tool)
+    only read it. match_count > 1 means an ambiguous match — the caller must
+    report it and must not pick a record on its own.
+    """
+    return search_synthetic_candidates(db, full_name, date_of_birth)
+
+
+@router.post("/applications/{application_id}/ege/synthetic-confirm", response_model=EgeResponse)
+def confirm_synthetic_ege(
+    application_id: int,
+    payload: SyntheticEgeConfirmInput,
+    current_user: Applicant,
+    db: Database,
+) -> EgeResponse:
+    """Bind the registry results of a user-confirmed candidate to the application.
+
+    Scores are copied from the registry as-is; the caller cannot supply values.
+    """
+    application = application_for(db, application_id, applicant_id=current_user.id, lock=True)
+    bind_synthetic_results(db, application, payload.candidate_id)
+    db.commit()
+    return ege_response(db, application)
 
 
 @router.get("/applications/{application_id}")

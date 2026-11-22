@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 
 from pgvector.sqlalchemy import Vector
@@ -6,8 +6,10 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -196,6 +198,27 @@ class SyntheticEgeResult(Base):
     year: Mapped[int] = mapped_column(Integer, primary_key=True)
     score: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(20), default="valid")
+
+
+class SyntheticEgeCandidate(Base):
+    """A synthetic person in the test EGE registry: full name plus date of birth.
+
+    The registry is reference data: it is only written by the administrative
+    fixture loader (``app.synthetic_ege_registry``), never by applicant-facing
+    routes or MCP tools. ``full_name`` is stored in its natural form; lookups
+    normalize case and whitespace, so several rows may intentionally match
+    one name and date of birth (ambiguous match, no unique constraint).
+    """
+
+    __tablename__ = "synthetic_ege_candidates"
+    __table_args__ = (Index("ix_synthetic_ege_candidates_name_dob", "full_name", "date_of_birth"),)
+
+    candidate_id: Mapped[str] = mapped_column(String(48), primary_key=True)
+    full_name: Mapped[str] = mapped_column(String(255))
+    date_of_birth: Mapped[date] = mapped_column(Date)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class EgeVerification(Base):

@@ -1,5 +1,6 @@
 import ipaddress
 import socket
+from datetime import date
 from typing import Annotated
 from urllib.parse import urlsplit
 
@@ -12,6 +13,12 @@ from pydantic import Field
 from app.admissions_schemas import (
     ApplicationCreate, ApplicationStatus, ApplicationUpdate, CampaignYear, EgeInput,
     StaffDocumentUpdate, StaffStatusUpdate,
+)
+from app.admissions_service import (
+    application_for,
+    bind_synthetic_results,
+    ege_response,
+    search_synthetic_candidates,
 )
 from app.knowledge_service import search_knowledge
 from app.mcp_service import get_authorized_user_for_mcp, mcp_operation
@@ -179,6 +186,47 @@ def verify_application_synthetic_ege(application_id: int) -> dict[str, object]:
     """Compare declared EGE scores against the synthetic test registry and return the recorded result."""
     with mcp_operation(UserRole.applicant) as (db, actor):
         return jsonable_encoder(admissions.verify_application_ege(application_id, actor, db))
+
+
+@mcp.tool
+def search_synthetic_ege_results(full_name: str, date_of_birth: date) -> dict[str, object]:
+    """Search the synthetic test EGE registry by full name and date of birth.
+
+    Use it when the applicant wants to apply and has given their full name
+    (surname, first name, patronymic) and date of birth (YYYY-MM-DD).
+
+    Returns match_count and the matches (subject, year, score per result):
+    - match_count == 1: present the found results to the user and ask them
+      to confirm that these are their results. After an explicit user
+      confirmation call confirm_synthetic_ege_results with the returned
+      candidate_id and the application id.
+    - match_count == 0: tell the user that no record was found and suggest
+      checking the full name and date of birth. Do not guess a person.
+    - match_count > 1 (ambiguous): tell the user that several records share
+      the same full name and date of birth and that automatic binding is
+      forbidden in this case. Do not offer the user a choice between the
+      records and do not call confirm_synthetic_ege_results. Suggest that
+      the user clarifies the data with the admissions committee.
+    """
+    with mcp_operation(UserRole.applicant) as (db, _):
+        return jsonable_encoder(
+            search_synthetic_candidates(db, full_name=full_name, date_of_birth=date_of_birth)
+        )
+
+
+@mcp.tool
+def confirm_synthetic_ege_results(application_id: int, candidate_id: str) -> dict[str, object]:
+    """Bind the confirmed synthetic EGE results to the applicant's draft application.
+
+    Call it only after the user explicitly confirmed that the presented
+    results (from search_synthetic_ege_results) are theirs. Scores are copied
+    from the registry as-is; this tool cannot alter the registry.
+    """
+    with mcp_operation(UserRole.applicant) as (db, actor):
+        application = application_for(db, application_id, applicant_id=actor.id, lock=True)
+        bind_synthetic_results(db, application, candidate_id)
+        db.commit()
+        return jsonable_encoder(ege_response(db, application))
 
 
 @mcp.tool

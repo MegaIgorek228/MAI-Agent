@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -118,6 +118,42 @@ class EgeInput(BaseModel):
 class SyntheticEgeInput(EgeScoreInput):
     candidate_id: SyntheticCandidateId
     status: Literal["valid", "annulled"] = "valid"
+
+
+class SyntheticCandidateInput(BaseModel):
+    """One synthetic person in the fixture registry."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    candidate_id: SyntheticCandidateId
+    full_name: Annotated[str, Field(min_length=3, max_length=255)]
+    date_of_birth: date
+
+    @model_validator(mode="after")
+    def compact_full_name(self):
+        self.full_name = " ".join(self.full_name.split())
+        return self
+
+
+class SyntheticEgeConfirmInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    candidate_id: SyntheticCandidateId
+
+
+class SyntheticEgeMatch(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    candidate_id: SyntheticCandidateId
+    full_name: str
+    date_of_birth: date
+    results: list[EgeScoreInput]
+
+
+class SyntheticEgeSearchResponse(BaseModel):
+    match_count: int
+    ambiguous: bool
+    matches: list[SyntheticEgeMatch]
 
 
 class EgeVerificationResponse(BaseModel):

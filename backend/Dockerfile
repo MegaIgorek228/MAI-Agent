@@ -19,6 +19,7 @@ COPY hermes-profile /root/.hermes
 
 COPY app ./app
 COPY alembic ./alembic
+COPY fixtures ./fixtures
 COPY alembic.ini .
 
 EXPOSE 8000
