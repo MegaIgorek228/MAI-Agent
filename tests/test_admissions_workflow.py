@@ -115,6 +115,7 @@ def test_application_staff_review_and_pinned_rules(client):
     doc_path = f"{staff_path}/documents/{document['id']}"
     downloaded = client.get(f"{doc_path}/file", headers=staff)
     assert downloaded.content == b"synthetic"
+    assert client.patch(doc_path, headers=staff, json={"status": "rejected"}).status_code == 422
     assert client.patch(doc_path, headers=staff, json={"status": "rejected", "review_note": "Переделать"}).status_code == 200
     own_docs = client.get(f"{applicant_path}/documents", headers=headers).json()
     assert own_docs[0]["status"] == "rejected"
@@ -125,7 +126,9 @@ def test_application_staff_review_and_pinned_rules(client):
     assert [item["id"] for item in queue.json()] == [application_id]
     application = client.get(staff_path, headers=staff).json()
     assert application["requirements"]["documents"]["status"] == "complete"
-    assert [event["status"] for event in application["history"]] == ["draft", "submitted", "under_review", "reviewed"]
+    assert [event["status"] for event in application["history"]] == [
+        "draft", "submitted", "under_review", "document_reviewed", "document_reviewed", "reviewed",
+    ]
 
 
 def test_synthetic_ege_separate_from_declared_scores_and_rules(client):

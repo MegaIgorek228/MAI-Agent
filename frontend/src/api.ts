@@ -71,7 +71,27 @@ export type DocumentItem = {
   review_message: string | null;
   analysis_json?: string | null;
   analysis_error?: string | null;
+  reviewed_at?: string | null;
+  reviewer?: string | null;
   created_at: string;
+};
+
+export type StaffDocumentQueueItem = {
+  application_id: number;
+  application_status: string;
+  applicant_id: number;
+  applicant_email: string;
+  applicant_name: string | null;
+  document_id: number;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  document_type: string | null;
+  document_created_at: string;
+  review_status: string | null;
+  review_note: string | null;
+  reviewed_at: string | null;
+  reviewer: string | null;
 };
 
 export type ChatSession = {
@@ -115,8 +135,9 @@ export type Application = ApplicationFields & {
 
 export type ApplicationEvent = {
   id: number;
-  status: ApplicationStatus;
+  status: string;
   note: string | null;
+  actor_id: number | null;
   created_at: string;
 };
 
@@ -554,6 +575,11 @@ export const getStaffApplication = (token: string, id: number) =>
     headers: { Authorization: `Bearer ${token}` }
   });
 
+export const getStaffDocumentQueue = (token: string, filters: URLSearchParams) =>
+  apiRequest<StaffDocumentQueueItem[]>(`/applicant/staff/documents?${filters}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
 export const reviewApplication = (token: string, id: number, status: ApplicationStatus, reviewNote: string) =>
   apiRequest<Application>(`${staffApplicationsPath}/${id}/status`, {
     method: "PATCH",
@@ -565,7 +591,7 @@ export const reviewApplicationDocument = (
   token: string,
   applicationId: number,
   documentId: number,
-  status: "accepted" | "rejected",
+  status: "accepted" | "rejected" | "changes_requested",
   reviewNote: string
 ) =>
   apiRequest<DocumentItem>(`${staffApplicationsPath}/${applicationId}/documents/${documentId}`, {

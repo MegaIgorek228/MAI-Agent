@@ -1116,3 +1116,61 @@
   font-size: .78rem;
   line-height: 1.4;
 }
+
+.workflow-document-preview {
+  margin-top: 18px;
+  border: 1px solid #c9cdc5;
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: #fbfbf9;
+}
+
+.workflow-document-preview-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.workflow-document-preview-heading h4 {
+  margin: 0 0 2px;
+  font-size: .95rem;
+  overflow-wrap: anywhere;
+}
+
+.workflow-document-preview-heading small {
+  color: #6a6f68;
+  font-size: .75rem;
+}
+
+.workflow-document-preview img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  border: 1px solid #c9cdc5;
+  border-radius: 8px;
+}
+
+.workflow-document-preview iframe {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 1px solid #c9cdc5;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.workflow-document-preview-text {
+  max-height: 70vh;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid #c9cdc5;
+  border-radius: 8px;
+  background: #fff;
+  font-size: .8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

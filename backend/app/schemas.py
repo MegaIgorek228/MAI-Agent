@@ -70,6 +70,8 @@ class DocumentResponse(BaseModel):
     review_message: str | None
     analysis_json: str | None
     analysis_error: str | None
+    reviewed_at: datetime | None = None
+    reviewer: str | None = None
     created_at: datetime
 
 

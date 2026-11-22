@@ -35,13 +35,16 @@ export const applicationStatus: Record<ApplicationStatus, string> = {
 
 export function ApplicationHistory({ events }: { events: ApplicationEvent[] }) {
   if (events.length === 0) return <p className="workflow-muted">Изменений статуса пока нет.</p>;
+  const eventLabel = (status: string) =>
+    (applicationStatus as Record<string, string>)[status]
+    ?? (status === "document_reviewed" ? "Решение по документу" : status);
   return (
     <ol className="workflow-timeline">
       {events.map((event) => (
         <li key={event.id}>
           <span className="workflow-timeline-dot" />
           <div>
-            <strong>{applicationStatus[event.status]}</strong>
+            <strong>{eventLabel(event.status)}</strong>
             <time dateTime={event.created_at}>
               {new Date(event.created_at).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" })}
             </time>

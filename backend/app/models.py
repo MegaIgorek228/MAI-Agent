@@ -184,6 +184,10 @@ class ApplicationDocument(Base):
     )
     review_status: Mapped[str | None] = mapped_column(String(20))
     review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reviewed_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+    )
 
 
 class ApplicationEvent(Base):

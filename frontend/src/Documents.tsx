@@ -13,12 +13,14 @@ import { Icon } from "./Icon";
 import { WorkflowEmpty, WorkflowHeader, WorkflowNotice, WorkflowStatus } from "./WorkflowUI";
 
 const documentStatus: Record<string, string> = {
+  pending: "Ждёт проверки",
   uploaded: "Загружен",
   extracted: "Текст извлечён",
   analyzed: "Проанализирован",
   needs_manual_review: "Требуется ручная проверка",
   accepted: "Принят",
-  rejected: "Отклонён"
+  rejected: "Отклонён",
+  changes_requested: "Запрошено исправление"
 };
 
 const commonDocumentTypes: { value: string; label: string }[] = [

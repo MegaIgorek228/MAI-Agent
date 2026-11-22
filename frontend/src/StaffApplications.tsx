@@ -19,10 +19,12 @@ import {
   getStaffApplication,
   getStaffApplications,
   getStaffDashboard,
+  getStaffDocumentQueue,
   publishAdmissionRule,
   reviewAchievement,
   reviewApplication,
-  reviewApplicationDocument
+  reviewApplicationDocument,
+  StaffDocumentQueueItem
 } from "./api";
 import { achievementCategory, achievementLevel, achievementStatus } from "./Achievements";
 import { ApplicationHistory, applicationStatus, Requirements, Verification } from "./Admissions";
@@ -61,7 +63,7 @@ const feedAction: Record<string, string> = {
 const dateLabel = (value: string) =>
   new Date(value).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" });
 
-type StaffMode = "dashboard" | "applications" | "applicants" | "achievements" | "rules";
+type StaffMode = "dashboard" | "documents" | "applications" | "applicants" | "achievements" | "rules";
 
 export function StaffApplications({ token }: { token: string }) {
   const [mode, setMode] = useState<StaffMode>("dashboard");
@@ -102,6 +104,12 @@ export function StaffApplications({ token }: { token: string }) {
     setMode("applications");
   };
 
+  const openApplication = (applicationId: number) => {
+    setFilters({ query: "", status: "", offset: 0 });
+    setSelected(applicationId);
+    setMode("applications");
+  };
+
   const switchTo = (target: StaffMode) => {
     setMode(target);
     window.scrollTo({ top: 0, behavior: "instant" });
@@ -113,12 +121,14 @@ export function StaffApplications({ token }: { token: string }) {
         description="Сводка по приёмной кампании, проверка заявлений, документов и индивидуальных достижений." />
       <div className="workflow-tabs" role="group" aria-label="Раздел рабочего места">
         <button type="button" aria-pressed={mode === "dashboard"} onClick={() => switchTo("dashboard")}><Icon name="grid" /> Обзор</button>
+        <button type="button" aria-pressed={mode === "documents"} onClick={() => switchTo("documents")}><Icon name="file" /> Проверка документов</button>
         <button type="button" aria-pressed={mode === "applications"} onClick={() => switchTo("applications")}><Icon name="folder" /> Заявления</button>
         <button type="button" aria-pressed={mode === "applicants"} onClick={() => switchTo("applicants")}><Icon name="user" /> Абитуриенты</button>
         <button type="button" aria-pressed={mode === "achievements"} onClick={() => switchTo("achievements")}><Icon name="badge" /> Достижения</button>
         <button type="button" aria-pressed={mode === "rules"} onClick={() => switchTo("rules")}><Icon name="book" /> Правила приёма</button>
       </div>
       {mode === "dashboard" && <StaffDashboard token={token} onNavigate={switchTo} />}
+      {mode === "documents" && <StaffDocumentQueue token={token} onOpenApplication={openApplication} />}
       {mode === "rules" && <AdmissionRuleEditor token={token} />}
       {mode === "applicants" && <StaffApplicantList token={token} onOpenApplication={openApplicantApplications} />}
       {mode === "achievements" && <StaffAchievementsQueue token={token} />}
@@ -188,6 +198,111 @@ export function StaffApplications({ token }: { token: string }) {
   );
 }
 
+function StaffDocumentQueue({ token, onOpenApplication }: {
+  token: string;
+  onOpenApplication: (applicationId: number) => void;
+}) {
+  const [items, setItems] = useState<StaffDocumentQueueItem[]>([]);
+  const [filters, setFilters] = useState({ status: "pending", query: "", offset: 0 });
+  const [pending, setPending] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+    const search = new URLSearchParams({ limit: String(pageSize), offset: String(filters.offset) });
+    if (filters.status) search.set("status", filters.status);
+    if (filters.query) search.set("q", filters.query);
+    setPending(true);
+    setError("");
+    getStaffDocumentQueue(token, search).then((data) => {
+      if (!ignore) setItems(data);
+    }).catch((requestError) => {
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить очередь документов"));
+    }).finally(() => {
+      if (!ignore) setPending(false);
+    });
+    return () => { ignore = true; };
+  }, [token, filters]);
+
+  const applyFilters = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    setFilters({
+      status: String(values.get("status") ?? ""),
+      query: String(values.get("query") ?? "").trim(),
+      offset: 0,
+    });
+  };
+
+  const documentState = (item: StaffDocumentQueueItem) =>
+    item.review_status ? item.review_status : "pending";
+
+  return (
+    <section className="workflow-panel workflow-queue" aria-labelledby="document-queue-heading">
+      <div className="workflow-panel-heading">
+        <h3 id="document-queue-heading">Очередь проверки документов</h3>
+        <p className="workflow-muted">
+          Все документы поданных заявлений. Решение по документу открывается в карточке заявления.
+        </p>
+      </div>
+      <form className="workflow-queue-filter" onSubmit={applyFilters}>
+        <label>
+          Поиск по абитуриенту
+          <input name="query" defaultValue={filters.query} placeholder="Имя, фамилия или email" />
+        </label>
+        <label>
+          Статус проверки
+          <select name="status" defaultValue={filters.status}>
+            <option value="pending">Ждут проверки</option>
+            <option value="accepted">Приняты</option>
+            <option value="rejected">Отклонены</option>
+            <option value="changes_requested">Запрошено исправление</option>
+            <option value="">Все документы</option>
+          </select>
+        </label>
+        <button type="submit" disabled={pending}><Icon name="search" /> Найти</button>
+      </form>
+      {pending && <p role="status" className="workflow-muted">Загрузка документов…</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+      {!pending && !error && items.length === 0 && (
+        <WorkflowEmpty title="Документов по этим условиям нет" description="Измените статус или поисковый запрос, чтобы увидеть другие документы." icon="search" />
+      )}
+      {items.length > 0 && (
+        <ul className="workflow-list workflow-queue-list">
+          {items.map((item) => (
+            <li key={`${item.application_id}-${item.document_id}`}>
+              <button className="workflow-queue-row" type="button" onClick={() => onOpenApplication(item.application_id)}>
+                <span className="workflow-mark"><Icon name="file" /></span>
+                <span className="workflow-row-main">
+                  <span>{item.filename} · {documentTypeLabel(item.document_type)}</span>
+                  <small>
+                    {item.applicant_name ?? item.applicant_email} · {item.applicant_email} ·
+                    заявление №{item.application_id} ({applicationStatus[item.application_status as ApplicationStatus] ?? item.application_status})
+                  </small>
+                  {item.review_note && <small>Комментарий: {item.review_note}</small>}
+                  {item.reviewed_at && <small>Проверено {dateLabel(item.reviewed_at)}{item.reviewer ? ` · ${item.reviewer}` : ""}</small>}
+                </span>
+                <WorkflowStatus status={documentState(item)}>
+                  {documentStatusLabel(documentState(item))}
+                </WorkflowStatus>
+                <Icon name="chevron-right" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {(filters.offset > 0 || items.length === pageSize) && (
+        <div className="workflow-actions">
+          <button className="workflow-secondary" type="button" disabled={pending || filters.offset === 0} onClick={() =>
+            setFilters((current) => ({ ...current, offset: current.offset - pageSize }))}>Предыдущая страница</button>
+          <button className="workflow-secondary" type="button" disabled={pending || items.length < pageSize} onClick={() =>
+            setFilters((current) => ({ ...current, offset: current.offset + pageSize }))}>Следующая страница</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function StaffDashboard({ token, onNavigate }: {
   token: string;
   onNavigate: (target: StaffMode) => void;
@@ -213,7 +328,7 @@ function StaffDashboard({ token, onNavigate }: {
     { label: "Всего абитуриентов", value: data.applicants_total, target: "applicants", attention: false },
     { label: "Заявлений в работе", value: data.applications_in_work, target: "applications", attention: false },
     { label: "Заявления ждут проверки", value: data.applications_awaiting_review, target: "applications", attention: data.applications_awaiting_review > 0 },
-    { label: "Документы ждут проверки", value: data.documents_awaiting_review, target: "applications", attention: data.documents_awaiting_review > 0 },
+    { label: "Документы ждут проверки", value: data.documents_awaiting_review, target: "documents", attention: data.documents_awaiting_review > 0 },
     { label: "Достижения ждут проверки", value: data.achievements_awaiting_review, target: "achievements", attention: data.achievements_awaiting_review > 0 }
   ];
 
@@ -752,6 +867,12 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
   const [detail, setDetail] = useState<StaffApplication | null>(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState("");
+  const [preview, setPreview] = useState<{
+    url: string;
+    content_type: string;
+    filename: string;
+    text: string | null;
+  } | null>(null);
 
   useEffect(() => {
     let ignore = false;
@@ -795,14 +916,50 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
   const setDocumentStatus = (event: FormEvent<HTMLFormElement>, documentId: number) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const status = form.get("status") === "rejected" ? "rejected" : "accepted";
+    const rawStatus = String(form.get("status") ?? "accepted");
+    const status = rawStatus === "rejected" ? "rejected" : rawStatus === "changes_requested" ? "changes_requested" : "accepted";
+    const note = String(form.get("note") ?? "").trim();
+    if (status !== "accepted" && !note) {
+      setError("Для отклонения или запроса исправления введите комментарий.");
+      return;
+    }
     return run(async () => {
-      const updated = await reviewApplicationDocument(token, id, documentId, status, String(form.get("note") ?? "").trim());
+      const updated = await reviewApplicationDocument(token, id, documentId, status, note);
       setDetail((current) => current ? {
         ...current,
         documents: current.documents.map((document) => document.id === documentId ? updated : document)
       } : current);
       setDetail(await getStaffApplication(token, id));
+    });
+  };
+
+  const previewDocument = async (documentId: number, filename: string, contentType: string) => {
+    setError("");
+    setPending(true);
+    try {
+      const file = await downloadApplicationDocument(token, id, documentId);
+      const blob = file.type ? file : new Blob([file], { type: contentType });
+      let text: string | null = null;
+      if (contentType.startsWith("text/") || contentType === "application/json") {
+        text = await file.text();
+      }
+      setPreview({
+        url: URL.createObjectURL(blob),
+        content_type: blob.type,
+        filename,
+        text,
+      });
+    } catch (requestError) {
+      setError(requestErrorMessage(requestError, "Не удалось открыть файл"));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const closePreview = () => {
+    setPreview((current) => {
+      if (current) URL.revokeObjectURL(current.url);
+      return null;
     });
   };
 
@@ -859,11 +1016,18 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
               <div>
                 <h5>{document.filename}</h5>
                 <small>{documentTypeLabel(document.document_type, typeTitles)}</small>
+                {document.reviewed_at && (
+                  <small>
+                    Проверено {dateLabel(document.reviewed_at)}
+                    {document.reviewer ? ` · ${document.reviewer}` : ""}
+                  </small>
+                )}
               </div>
               <WorkflowStatus status={document.status}>{documentStatusLabel(document.status)}</WorkflowStatus>
             </div>
-            {document.review_message && <p className="workflow-muted">{document.review_message}</p>}
+            {document.review_message && <p className="workflow-muted">Комментарий: {document.review_message}</p>}
             <div className="workflow-actions">
+              <button className="workflow-secondary" type="button" disabled={pending} onClick={() => previewDocument(document.id, document.filename, document.content_type)}>Просмотреть файл</button>
               <button className="workflow-secondary" type="button" disabled={pending} onClick={() => download(document.id, document.filename)}>Скачать файл</button>
             </div>
             {document.extracted_text && <details className="workflow-disclosure"><summary>Извлечённый текст</summary><pre>{document.extracted_text}</pre></details>}
@@ -872,9 +1036,10 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
                 <div className="form-columns">
                   <label>
                     Результат проверки
-                    <select name="status" defaultValue={document.status === "rejected" ? "rejected" : "accepted"}>
+                    <select name="status" defaultValue={document.status === "rejected" ? "rejected" : document.status === "changes_requested" ? "changes_requested" : "accepted"}>
                       <option value="accepted">Принять файл</option>
                       <option value="rejected">Отклонить файл</option>
+                      <option value="changes_requested">Запросить исправление</option>
                     </select>
                   </label>
                   <label>
@@ -907,6 +1072,24 @@ function StaffApplicationDetail({ token, id, onUpdate }: {
       )}
       {detail.history.length > 0 && (
         <details className="workflow-disclosure"><summary>История заявления</summary><ApplicationHistory events={detail.history} /></details>
+      )}
+      {preview && (
+        <div className="workflow-document-preview" role="dialog" aria-modal="true" aria-label={`Просмотр файла ${preview.filename}`}>
+          <div className="workflow-document-preview-heading">
+            <div>
+              <h4>{preview.filename}</h4>
+              <small>{preview.content_type}</small>
+            </div>
+            <button type="button" className="workflow-secondary" onClick={closePreview}>Закрыть</button>
+          </div>
+          {preview.text !== null
+            ? <pre className="workflow-document-preview-text">{preview.text}</pre>
+            : preview.content_type.startsWith("image/")
+              ? <img src={preview.url} alt={preview.filename} />
+              : preview.content_type === "application/pdf"
+                ? <iframe src={preview.url} title={preview.filename} />
+                : <p className="workflow-muted">Предпросмотр недоступен для этого типа файла — скачайте его для просмотра.</p>}
+        </div>
       )}
     </section>
   );

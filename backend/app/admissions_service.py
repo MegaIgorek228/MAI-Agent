@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 from hashlib import sha256
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, defer
 
 from app.admissions_schemas import (
@@ -18,6 +18,7 @@ from app.admissions_schemas import (
     RequirementsResponse,
     StaffApplicantResponse,
     StaffApplicationResponse,
+    StaffDocumentQueueItem,
     SyntheticEgeMatch,
     SyntheticEgeSearchResponse,
 )
@@ -27,6 +28,7 @@ from app.models import (
     Application,
     ApplicationDocument,
     ApplicationEvent,
+    ApplicantProfile,
     Document,
     EgeScore,
     EgeVerification,
@@ -387,6 +389,7 @@ def application_documents(db: Session, application: Application) -> list[Documen
         DocumentResponse.model_validate(document).model_copy(update={
             "status": link.review_status or document.status,
             "review_message": link.review_note if link.review_status else document.review_message,
+            "reviewed_at": link.reviewed_at,
         })
         for document, link in db.execute(
             select(Document, ApplicationDocument)
@@ -402,11 +405,117 @@ def staff_application_response(db: Session, application: Application) -> StaffAp
     applicant = db.get(User, application.applicant_id)
     if applicant is None:
         raise HTTPException(status_code=404, detail="Applicant not found")
+    documents = application_documents(db, application)
+    # Resolve the staff members who made the last decision on each document.
+    reviewed_by: dict[int, int | None] = {
+        document_id: reviewer
+        for document_id, reviewer in db.execute(
+            select(Document.id, ApplicationDocument.reviewed_by)
+            .join(ApplicationDocument, ApplicationDocument.document_id == Document.id)
+            .where(ApplicationDocument.application_id == application.id)
+        )
+    }
+    reviewer_ids = {value for value in reviewed_by.values() if value is not None}
+    reviewers = (
+        {
+            user.id: user.email
+            for user in db.scalars(select(User).where(User.id.in_(reviewer_ids)))
+        }
+        if reviewer_ids
+        else {}
+    )
+    for document in documents:
+        reviewer_id = reviewed_by.get(document.id)
+        if reviewer_id is not None:
+            document.reviewer = reviewers.get(reviewer_id)
     return StaffApplicationResponse(
         application=application_responses(db, [application])[0],
         applicant=StaffApplicantResponse.model_validate(applicant),
-        documents=application_documents(db, application),
+        documents=documents,
         ege=ege_response(db, application),
         requirements=requirements_for(db, application),
         history=application_history(db, application.id),
     )
+
+
+def staff_document_queue(
+    db: Session,
+    *,
+    review_status: str | None,
+    q: str | None,
+    limit: int,
+    offset: int,
+) -> list[StaffDocumentQueueItem]:
+    """Cross-application document review queue.
+
+    ``review_status`` accepts a concrete link status (``accepted``,
+    ``rejected``, ``changes_requested``) or ``pending`` for documents that
+    have no decision yet. ``q`` searches the applicant by email or name.
+    """
+    query = (
+        select(
+            Application.id.label("application_id"),
+            Application.status.label("application_status"),
+            User.id.label("applicant_id"),
+            User.email.label("applicant_email"),
+            ApplicantProfile.first_name.label("first_name"),
+            ApplicantProfile.last_name.label("last_name"),
+            Document.id.label("document_id"),
+            Document.filename.label("filename"),
+            Document.content_type.label("content_type"),
+            Document.size_bytes.label("size_bytes"),
+            Document.document_type.label("document_type"),
+            Document.created_at.label("document_created_at"),
+            ApplicationDocument.review_status.label("review_status"),
+            ApplicationDocument.review_note.label("review_note"),
+            ApplicationDocument.reviewed_at.label("reviewed_at"),
+            ApplicationDocument.reviewed_by.label("reviewed_by"),
+        )
+        .join(Application, Application.id == ApplicationDocument.application_id)
+        .join(User, User.id == Application.applicant_id)
+        .join(Document, Document.id == ApplicationDocument.document_id)
+        .outerjoin(ApplicantProfile, ApplicantProfile.user_id == User.id)
+        .where(Application.status != "draft")
+    )
+    if review_status == "pending":
+        query = query.where(ApplicationDocument.review_status.is_(None))
+    elif review_status:
+        query = query.where(ApplicationDocument.review_status == review_status)
+    if q and q.strip():
+        term = f"%{q.strip()}%"
+        query = query.where(or_(
+            User.email.ilike(term),
+            ApplicantProfile.first_name.ilike(term),
+            ApplicantProfile.last_name.ilike(term),
+        ))
+    rows = list(db.execute(query.order_by(
+        Application.updated_at.desc(), Application.id.desc(), Document.id,
+    ).offset(offset).limit(limit)))
+    if not rows:
+        return []
+    reviewer_ids = {row.reviewed_by for row in rows if row.reviewed_by is not None}
+    reviewers = (
+        {user.id: user.email for user in db.scalars(select(User).where(User.id.in_(reviewer_ids)))}
+        if reviewer_ids
+        else {}
+    )
+    return [
+        StaffDocumentQueueItem(
+            application_id=row.application_id,
+            application_status=row.application_status,
+            applicant_id=row.applicant_id,
+            applicant_email=row.applicant_email,
+            applicant_name=" ".join(name for name in (row.first_name, row.last_name) if name) or None,
+            document_id=row.document_id,
+            filename=row.filename,
+            content_type=row.content_type,
+            size_bytes=row.size_bytes,
+            document_type=row.document_type,
+            document_created_at=row.document_created_at,
+            review_status=row.review_status,
+            review_note=row.review_note,
+            reviewed_at=row.reviewed_at,
+            reviewer=reviewers.get(row.reviewed_by) if row.reviewed_by is not None else None,
+        )
+        for row in rows
+    ]

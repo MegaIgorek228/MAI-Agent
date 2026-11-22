@@ -180,7 +180,7 @@ class StaffStatusUpdate(BaseModel):
 class StaffDocumentUpdate(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    status: Literal["accepted", "rejected"]
+    status: Literal["accepted", "rejected", "changes_requested"]
     review_note: ReviewNote | None = None
 
 
@@ -188,9 +188,33 @@ class ApplicationEventResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
-    status: ApplicationStatus
+    status: Literal[
+        "draft", "submitted", "under_review", "needs_changes", "reviewed",
+        "document_reviewed",
+    ]
     note: str | None
+    actor_id: int | None
     created_at: datetime
+
+
+class StaffDocumentQueueItem(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    application_id: int
+    application_status: str
+    applicant_id: int
+    applicant_email: str
+    applicant_name: str | None
+    document_id: int
+    filename: str
+    content_type: str
+    size_bytes: int
+    document_type: str | None
+    document_created_at: datetime
+    review_status: str | None
+    review_note: str | None
+    reviewed_at: datetime | None
+    reviewer: str | None
 
 
 class DocumentChecklistResponse(BaseModel):

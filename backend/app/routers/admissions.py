@@ -20,6 +20,7 @@ from app.admissions_schemas import (
     RuleSetCreate,
     RuleSetResponse,
     StaffApplicationResponse,
+    StaffDocumentQueueItem,
     StaffDocumentUpdate,
     StaffStatusUpdate,
     SyntheticEgeConfirmInput,
@@ -41,12 +42,13 @@ from app.admissions_service import (
     search_synthetic_candidates,
     set_application_documents,
     staff_application_response,
+    staff_document_queue,
     transition,
     verify_ege,
 )
 from app.db import get_db
 from app.dependencies import get_current_user, require_roles
-from app.models import AdmissionRuleSet, Application, ApplicationDocument, Document, User, UserRole
+from app.models import AdmissionRuleSet, Application, ApplicationDocument, ApplicationEvent, Document, User, UserRole
 from app.schemas import DocumentResponse
 
 router = APIRouter(prefix="/applicant", tags=["admissions"])
@@ -277,6 +279,22 @@ def list_staff_applications(
     return application_responses(db, applications)
 
 
+@router.get("/staff/documents", response_model=list[StaffDocumentQueueItem])
+def list_staff_document_queue(
+    current_user: Staff,
+    db: Database,
+    status: Annotated[str | None, Query(max_length=32)] = None,
+    q: Annotated[str | None, Query(max_length=255)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[StaffDocumentQueueItem]:
+    """Review queue across all submitted applications, with a status filter
+    (``pending`` for undecided documents) and applicant search."""
+    return staff_document_queue(
+        db, review_status=status, q=q, limit=limit, offset=offset,
+    )
+
+
 def _staff_application(db: Session, application_id: int, *, lock: bool = False) -> Application:
     application = application_for(db, application_id, lock=lock)
     if application.status == "draft":
@@ -333,7 +351,8 @@ def download_staff_document(
     document, _ = _attached_document(db, application, document_id)
     filename = quote(document.filename, safe="")
     return Response(
-        content=document.content, media_type="application/octet-stream",
+        content=document.content,
+        media_type=document.content_type or "application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
 
@@ -343,14 +362,37 @@ def review_staff_document(
     application_id: int, document_id: int, payload: StaffDocumentUpdate,
     current_user: Staff, db: Database,
 ) -> DocumentResponse:
+    if payload.status == "rejected" and not (payload.review_note or "").strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Отклонение документа требует комментария",
+        )
     application = _staff_application(db, application_id, lock=True)
     if application.status != "under_review":
         raise HTTPException(status_code=409, detail="Application is not under review")
     document, link = _attached_document(db, application, document_id)
+    decision_labels = {
+        "accepted": "принят",
+        "rejected": "отклонён",
+        "changes_requested": "запрошено исправление",
+    }
+    note = (payload.review_note or "").strip() or None
     link.review_status = payload.status
-    link.review_note = payload.review_note
+    link.review_note = note
+    link.reviewed_at = datetime.now(UTC)
+    link.reviewed_by = current_user.id
+    event_note = f"Документ «{document.filename}» (№{document.id}): {decision_labels[payload.status]}"
+    if note:
+        event_note = f"{event_note} — {note}"
+    db.add(ApplicationEvent(
+        application_id=application.id,
+        actor_id=current_user.id,
+        status="document_reviewed",
+        note=event_note,
+    ))
     application.updated_at = datetime.now(UTC)
     db.commit()
     return DocumentResponse.model_validate(document).model_copy(update={
         "status": link.review_status, "review_message": link.review_note,
+        "reviewed_at": link.reviewed_at, "reviewer": current_user.email,
     })
