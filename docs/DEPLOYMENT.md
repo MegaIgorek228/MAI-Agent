@@ -22,12 +22,18 @@
 
 ## Шаг 1. Клонирование репозитория
 
+Основная ветка — `master` (единственная «боевая»; рабочие ветки создаются от неё).
+
 ```powershell
-git clone --branch fixes/admissions-workflows https://github.com/MegaIgorek228/MAI-Agent.git
+git clone https://github.com/MegaIgorek228/MAI-Agent.git
 cd MAI-Agent
 ```
 
-Если репозиторий уже клонирован, выполните `git switch fixes/admissions-workflows`.
+Для разработки создайте собственную ветку от `master`, например:
+
+```powershell
+git switch -c fixes/<название-задачи>
+```
 
 ## Шаг 2. Файл окружения `.env`
 
