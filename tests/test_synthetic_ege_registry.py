@@ -92,7 +92,7 @@ def test_unique_match_found_case_and_whitespace_insensitive(client):
     scores = {(item["subject"], item["year"]): item["score"] for item in match["results"]}
     assert scores[("русский язык", 2026)] == 88
     assert scores[("математика профильная", 2026)] == 92
-    assert scores[("физика", 2026)] == 79
+    assert scores[("физика", 2026)] == 100
 
 
 def test_no_match_is_reported(client):
@@ -173,7 +173,7 @@ def test_confirm_binds_registry_scores_and_links_profile(client):
             (row.candidate_id, row.subject, row.year): row.score
             for row in db.query(SyntheticEgeResult)
         }
-        assert reference[("SYN-1001", "физика", 2026)] == 79
+        assert reference[("SYN-1001", "физика", 2026)] == 100
 
 
 def test_confirm_rejects_unknown_candidate(client):

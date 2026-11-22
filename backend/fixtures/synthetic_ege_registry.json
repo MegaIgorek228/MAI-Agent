@@ -14,7 +14,7 @@
   "results": [
     {"candidate_id": "SYN-1001", "subject": "Русский язык", "year": 2026, "score": 88},
     {"candidate_id": "SYN-1001", "subject": "Математика профильная", "year": 2026, "score": 92},
-    {"candidate_id": "SYN-1001", "subject": "Физика", "year": 2026, "score": 79},
+    {"candidate_id": "SYN-1001", "subject": "Физика", "year": 2026, "score": 100},
     {"candidate_id": "SYN-1002", "subject": "Русский язык", "year": 2026, "score": 94},
     {"candidate_id": "SYN-1002", "subject": "Математика профильная", "year": 2026, "score": 85},
     {"candidate_id": "SYN-1002", "subject": "Информатика", "year": 2026, "score": 90},
