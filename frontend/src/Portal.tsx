@@ -6,13 +6,15 @@ import { AircraftMap } from "./AircraftMap";
 import { AircraftScene } from "./AircraftScene";
 import { Icon } from "./Icon";
 
-export type View = "home" | "profile" | "documents" | "applications" | "staff" | "agent";
+export type View = "home" | "profile" | "documents" | "applications" | "achievements" | "staff" | "agent";
 export type AuthMode = "login" | "register";
+export type RegisterType = "applicant" | "staff";
 
 const viewTitles: Record<View, string> = {
   home: "Главная",
   agent: "Ассистент",
   applications: "Заявления",
+  achievements: "Достижения",
   documents: "Документы",
   staff: "Рабочее место",
   profile: "Профиль"
@@ -48,14 +50,19 @@ type AuthScreenProps = {
   password: string;
   error: string;
   pending: boolean;
+  registerType: RegisterType;
+  inviteCode: string;
   onEmailChange: (email: string) => void;
   onPasswordChange: (password: string) => void;
+  onRegisterTypeChange: (type: RegisterType) => void;
+  onInviteCodeChange: (code: string) => void;
   onModeChange: () => void;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 };
 
 export function AuthScreen({
-  mode, email, password, error, pending, onEmailChange, onPasswordChange, onModeChange, onSubmit
+  mode, email, password, error, pending, registerType, inviteCode,
+  onEmailChange, onPasswordChange, onRegisterTypeChange, onInviteCodeChange, onModeChange, onSubmit
 }: AuthScreenProps) {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const signingIn = mode === "login";
@@ -84,6 +91,23 @@ export function AuthScreen({
                 <h1 id="auth-title">{signingIn ? "Вход в кабинет" : "Регистрация"}</h1>
               </div>
               <form onSubmit={onSubmit} className="auth-form">
+                {!signingIn && (
+                  <div className="auth-field">
+                    <label>Кто вы</label>
+                    <div className="auth-roles" role="radiogroup" aria-label="Тип регистрации">
+                      <button type="button" className={registerType === "applicant" ? "auth-role auth-role--active" : "auth-role"}
+                        role="radio" aria-checked={registerType === "applicant"}
+                        onClick={() => onRegisterTypeChange("applicant")}>
+                        Я абитуриент
+                      </button>
+                      <button type="button" className={registerType === "staff" ? "auth-role auth-role--active" : "auth-role"}
+                        role="radio" aria-checked={registerType === "staff"}
+                        onClick={() => onRegisterTypeChange("staff")}>
+                        Я сотрудник приёмной комиссии
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <label className="auth-field">
                   Email
                   <span className="auth-input">
@@ -107,6 +131,20 @@ export function AuthScreen({
                     </button>
                   </div>
                 </div>
+                {!signingIn && registerType === "staff" && (
+                  <div className="auth-field">
+                    <label htmlFor="auth-invite">Код приглашения</label>
+                    <div className="auth-input">
+                      <Icon name="shield" />
+                      <input id="auth-invite" name="invite_code" value={inviteCode}
+                        placeholder="MAI-XXXX-XXXX-XXXX-XXXX"
+                        onChange={(event) => onInviteCodeChange(event.target.value)} required />
+                    </div>
+                    <small className="auth-invite-hint">
+                      Код выдаёт администратор приёмной комиссии. Без него регистрация сотрудника невозможна.
+                    </small>
+                  </div>
+                )}
                 {error && <p className="error" role="alert">{error}</p>}
                 <button className="auth-submit" type="submit" disabled={pending}>
                   {pending ? (signingIn ? "Входим…" : "Создаём аккаунт…") : (signingIn ? "Войти" : "Создать аккаунт")}
@@ -194,7 +232,7 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
 
   const account = identity(user, profile);
   const nav: View[] = ["home", "agent"];
-  if (user.role === "applicant") nav.push("applications");
+  if (user.role === "applicant") nav.push("applications", "achievements");
   if (user.role !== "student") nav.push("documents");
   if (isStaff(user)) nav.push("staff");
   nav.push("profile");

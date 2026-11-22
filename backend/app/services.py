@@ -9,11 +9,16 @@ def get_user_by_email(db: Session, email: str) -> User | None:
     return db.scalar(select(User).where(User.email == email.lower()))
 
 
-def register_user(db: Session, email: str, password: str) -> User:
+def register_user(
+    db: Session, email: str, password: str, role: str = UserRole.applicant.value
+) -> User:
+    """Create an account. ``role`` is internal: it is set by the register
+    endpoint only after a staff invitation has been validated, so a request
+    can never assign a role to itself."""
     user = User(
         email=email.lower(),
         password_hash=hash_password(password),
-        role=UserRole.applicant.value,
+        role=role,
     )
     db.add(user)
     db.commit()

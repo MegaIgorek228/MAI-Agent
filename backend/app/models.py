@@ -29,6 +29,28 @@ class UserRole(StrEnum):
     administrator = "administrator"
 
 
+class StaffInvite(Base):
+    """A one-time, expiring invitation for staff registration.
+
+    Only a SHA-256 hash of the code is stored; the plaintext code is shown
+    once at creation (administrative CLI) and never persisted.
+    """
+
+    __tablename__ = "staff_invites"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    note: Mapped[str | None] = mapped_column(String(255))
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    used_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -233,6 +255,61 @@ class EgeVerification(Base):
     missing_subjects: Mapped[list[str]] = mapped_column(JSON)
     mismatched_subjects: Mapped[list[str]] = mapped_column(JSON)
     verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class IndividualAchievement(Base):
+    """An applicant-declared individual achievement (olympiad, sport, GTO, ...).
+
+    Three distinct concepts are modelled deliberately: the declared achievement
+    (this row), the staff review (``status`` + ``AchievementReview`` history),
+    and admission scoring (out of scope — a confirmed achievement may later be
+    counted by separate admission rules; no points are ever assigned here).
+    """
+
+    __tablename__ = "individual_achievements"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    applicant_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    application_id: Mapped[int | None] = mapped_column(
+        ForeignKey("applications.id", ondelete="SET NULL"), index=True
+    )
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    level: Mapped[str | None] = mapped_column(String(32))
+    achieved_on: Mapped[date] = mapped_column(Date)
+    organization: Mapped[str | None] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    document_id: Mapped[int | None] = mapped_column(
+        ForeignKey("documents.id", ondelete="SET NULL"), index=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_comment: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class AchievementReview(Base):
+    """Append-only history of lifecycle actions on an individual achievement."""
+
+    __tablename__ = "achievement_reviews"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    achievement_id: Mapped[int] = mapped_column(
+        ForeignKey("individual_achievements.id", ondelete="CASCADE"), index=True
+    )
+    action: Mapped[str] = mapped_column(String(32))
+    comment: Mapped[str | None] = mapped_column(Text)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class ChatSession(Base):

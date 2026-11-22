@@ -266,11 +266,3 @@ def analyze_uploaded_document(
     db.commit()
     return {"document_id": document.id, "analysis": result.model_dump(mode="json")}
 
-
-@router.get("/staff/applicants")
-def list_applicants(
-    current_user: User = Depends(require_roles(UserRole.admissions_staff, UserRole.administrator)),
-    db: Session = Depends(get_db),
-) -> list[dict[str, object]]:
-    users = list(db.scalars(select(User).where(User.role == UserRole.applicant.value)))
-    return [{"id": user.id, "email": user.email, "is_active": user.is_active} for user in users]

@@ -1,18 +1,30 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import {
-  Applicant,
   Application,
   ApplicationStatus,
+  AchievementCategory,
+  AchievementItem,
+  StaffAchievementCard,
+  StaffApplicantCard,
+  StaffApplicantRow,
+  StaffApplication,
+  StaffDashboardData,
+  downloadAchievementDocument,
   downloadApplicationDocument,
+  getStaffAchievementCard,
+  getStaffAchievements,
+  getStaffApplicantCard,
   getStaffApplicants,
   getStaffApplication,
   getStaffApplications,
+  getStaffDashboard,
   publishAdmissionRule,
+  reviewAchievement,
   reviewApplication,
-  reviewApplicationDocument,
-  StaffApplication
+  reviewApplicationDocument
 } from "./api";
+import { achievementCategory, achievementLevel, achievementStatus } from "./Achievements";
 import { ApplicationHistory, applicationStatus, Requirements, Verification } from "./Admissions";
 import { documentStatusLabel, requestErrorMessage } from "./Documents";
 import { Icon } from "./Icon";
@@ -25,8 +37,34 @@ const nextStatuses: Partial<Record<ApplicationStatus, ApplicationStatus[]>> = {
   under_review: ["needs_changes", "reviewed"]
 };
 
+const achievementTone: Record<AchievementItem["status"], string> = {
+  draft: "uploaded",
+  pending: "submitted",
+  confirmed: "reviewed",
+  rejected: "rejected",
+  needs_revision: "needs_changes"
+};
+
+// Human labels for feed/history actions (not statuses).
+const feedAction: Record<string, string> = {
+  created: "создано",
+  updated: "изменено",
+  submitted: "отправлено на проверку",
+  resubmitted: "повторно отправлено на проверку",
+  reviewed: "проверено",
+  needs_changes: "требуются изменения",
+  confirmed: "подтверждено",
+  rejected: "отклонено",
+  needs_revision: "запрошено исправление"
+};
+
+const dateLabel = (value: string) =>
+  new Date(value).toLocaleString("ru-RU", { dateStyle: "short", timeStyle: "short" });
+
+type StaffMode = "dashboard" | "applications" | "applicants" | "achievements" | "rules";
+
 export function StaffApplications({ token }: { token: string }) {
-  const [mode, setMode] = useState<"applications" | "applicants" | "rules">("applications");
+  const [mode, setMode] = useState<StaffMode>("dashboard");
   const [applications, setApplications] = useState<Application[]>([]);
   const [filters, setFilters] = useState({ query: "", status: "", offset: 0 });
   const [selected, setSelected] = useState<number | null>(null);
@@ -58,24 +96,32 @@ export function StaffApplications({ token }: { token: string }) {
     setSelected(null);
   };
 
-  const onUpdate = (application: Application) => {
-    setApplications((current) => current.map((item) => item.id === application.id ? application : item));
+  const openApplicantApplications = (email: string) => {
+    setFilters({ query: email, status: "", offset: 0 });
+    setSelected(null);
+    setMode("applications");
+  };
+
+  const switchTo = (target: StaffMode) => {
+    setMode(target);
+    window.scrollTo({ top: 0, behavior: "instant" });
   };
 
   return (
     <div className="workflow">
-      <WorkflowHeader level={1} title="Рабочее место сотрудника" description="Проверяйте заявления и документы и публикуйте правила приёма." />
+      <WorkflowHeader level={1} title="Рабочее место сотрудника"
+        description="Сводка по приёмной кампании, проверка заявлений, документов и индивидуальных достижений." />
       <div className="workflow-tabs" role="group" aria-label="Раздел рабочего места">
-        <button type="button" aria-pressed={mode === "applications"} onClick={() => setMode("applications")}><Icon name="folder" /> Заявления</button>
-        <button type="button" aria-pressed={mode === "applicants"} onClick={() => setMode("applicants")}><Icon name="user" /> Абитуриенты</button>
-        <button type="button" aria-pressed={mode === "rules"} onClick={() => setMode("rules")}><Icon name="book" /> Правила приёма</button>
+        <button type="button" aria-pressed={mode === "dashboard"} onClick={() => switchTo("dashboard")}><Icon name="grid" /> Обзор</button>
+        <button type="button" aria-pressed={mode === "applications"} onClick={() => switchTo("applications")}><Icon name="folder" /> Заявления</button>
+        <button type="button" aria-pressed={mode === "applicants"} onClick={() => switchTo("applicants")}><Icon name="user" /> Абитуриенты</button>
+        <button type="button" aria-pressed={mode === "achievements"} onClick={() => switchTo("achievements")}><Icon name="badge" /> Достижения</button>
+        <button type="button" aria-pressed={mode === "rules"} onClick={() => switchTo("rules")}><Icon name="book" /> Правила приёма</button>
       </div>
+      {mode === "dashboard" && <StaffDashboard token={token} onNavigate={switchTo} />}
       {mode === "rules" && <AdmissionRuleEditor token={token} />}
-      {mode === "applicants" && <StaffApplicantList token={token} onOpen={(applicant) => {
-        setFilters({ query: applicant.email, status: "", offset: 0 });
-        setSelected(null);
-        setMode("applications");
-      }} />}
+      {mode === "applicants" && <StaffApplicantList token={token} onOpenApplication={openApplicantApplications} />}
+      {mode === "achievements" && <StaffAchievementsQueue token={token} />}
       {mode === "applications" && (
         <>
           <section className="workflow-panel workflow-queue" aria-labelledby="queue-heading">
@@ -132,55 +178,570 @@ export function StaffApplications({ token }: { token: string }) {
               </div>
             )}
           </section>
-          {selected !== null && <StaffApplicationDetail key={selected} token={token} id={selected} onUpdate={onUpdate} />}
+          {selected !== null && (
+            <StaffApplicationDetail key={selected} token={token} id={selected} onUpdate={(application) =>
+              setApplications((current) => current.map((item) => item.id === application.id ? application : item))} />
+          )}
         </>
       )}
     </div>
   );
 }
 
-function StaffApplicantList({ token, onOpen }: { token: string; onOpen: (applicant: Applicant) => void }) {
-  const [applicants, setApplicants] = useState<Applicant[] | null>(null);
+function StaffDashboard({ token, onNavigate }: {
+  token: string;
+  onNavigate: (target: StaffMode) => void;
+}) {
+  const [data, setData] = useState<StaffDashboardData | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     let ignore = false;
-    getStaffApplicants(token).then((list) => {
-      if (!ignore) setApplicants(list);
+    setData(null);
+    getStaffDashboard(token).then((current) => {
+      if (!ignore) setData(current);
     }).catch((requestError) => {
-      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить список абитуриентов"));
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить сводку"));
     });
     return () => { ignore = true; };
   }, [token]);
 
+  if (error) return <p className="error" role="alert">{error}</p>;
+  if (!data) return <p role="status" className="workflow-muted">Загружаем сводку по приёмной кампании…</p>;
+
+  const stats: Array<{ label: string; value: number; target: StaffMode; attention: boolean }> = [
+    { label: "Всего абитуриентов", value: data.applicants_total, target: "applicants", attention: false },
+    { label: "Заявлений в работе", value: data.applications_in_work, target: "applications", attention: false },
+    { label: "Заявления ждут проверки", value: data.applications_awaiting_review, target: "applications", attention: data.applications_awaiting_review > 0 },
+    { label: "Документы ждут проверки", value: data.documents_awaiting_review, target: "applications", attention: data.documents_awaiting_review > 0 },
+    { label: "Достижения ждут проверки", value: data.achievements_awaiting_review, target: "achievements", attention: data.achievements_awaiting_review > 0 }
+  ];
+
   return (
-    <section className="workflow-panel" aria-labelledby="applicants-heading">
-      <div className="workflow-panel-heading">
-        <h3 id="applicants-heading">Абитуриенты</h3>
-        {Boolean(applicants?.length) && <span className="workflow-count">{applicants?.length}</span>}
-      </div>
-      {error ? <p role="alert" className="error">{error}</p> : !applicants ? (
-        <p role="status" className="workflow-muted">Загрузка абитуриентов…</p>
-      ) : applicants.length === 0 ? (
-        <WorkflowEmpty title="Абитуриентов пока нет" />
-      ) : (
-        <ul className="workflow-list workflow-queue-list">
-          {applicants.map((applicant) => (
-            <li key={applicant.id}>
-              <button className="workflow-queue-row" type="button" onClick={() => onOpen(applicant)}>
-                <span className="workflow-mark"><Icon name="user" /></span>
-                <span className="workflow-row-main">
-                  <span>{applicant.email}</span>
-                  {!applicant.is_active && <small>Учётная запись неактивна</small>}
-                </span>
-                <Icon name="chevron-right" />
+    <>
+      <section className="workflow-panel" aria-labelledby="dashboard-heading">
+        <div className="workflow-panel-heading">
+          <h3 id="dashboard-heading">Сводка</h3>
+        </div>
+        <div className="workflow-stats">
+          {stats.map((stat) => (
+            <div key={stat.label} className={stat.attention ? "workflow-stat workflow-stat--attention" : "workflow-stat"}>
+              <span className="workflow-stat__value">{stat.value}</span>
+              <span className="workflow-stat__label">{stat.label}</span>
+              <button type="button" className="workflow-stat__action" onClick={() => onNavigate(stat.target)}>
+                Перейти <Icon name="chevron-right" />
               </button>
-            </li>
+            </div>
           ))}
-        </ul>
+        </div>
+      </section>
+      <section className="workflow-panel" aria-labelledby="activity-heading">
+        <div className="workflow-panel-heading">
+          <h3 id="activity-heading">Последние действия</h3>
+        </div>
+        {data.recent_activity.length === 0
+          ? <WorkflowEmpty icon="inbox" title="Активности пока нет" description="Здесь появятся новые заявления, документы и достижения." />
+          : (
+            <ol className="workflow-activity">
+              {data.recent_activity.map((entry) => (
+                <li key={`${entry.source}-${entry.reference_id}-${entry.created_at}`} className="workflow-activity-item">
+                  <time dateTime={entry.created_at}>{dateLabel(entry.created_at)}</time>
+                  <div>
+                    {entry.source === "application"
+                      ? <>Заявление №{entry.reference_id}: <strong>{feedAction[entry.action] ?? entry.action}</strong></>
+                      : <>Достижение №{entry.reference_id}: <strong>{feedAction[entry.action] ?? entry.action}</strong></>}
+                    {entry.note && <small>{entry.note}</small>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+      </section>
+    </>
+  );
+}
+
+function StaffApplicantList({ token, onOpenApplication }: {
+  token: string;
+  onOpenApplication: (email: string) => void;
+}) {
+  const [rows, setRows] = useState<StaffApplicantRow[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+    setRows(null);
+    getStaffApplicants(token, query).then((list) => {
+      if (!ignore) setRows(list);
+    }).catch((requestError) => {
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить список абитуриентов"));
+    });
+    return () => { ignore = true; };
+  }, [token, query]);
+
+  const applySearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    setSelected(null);
+    setQuery(String(values.get("query") ?? "").trim());
+  };
+
+  return (
+    <>
+      <section className="workflow-panel" aria-labelledby="applicants-heading">
+        <div className="workflow-panel-heading">
+          <h3 id="applicants-heading">Абитуриенты</h3>
+          {rows && rows.length > 0 && <span className="workflow-count">{rows.length}</span>}
+        </div>
+        <form className="workflow-queue-filter" onSubmit={applySearch}>
+          <label>
+            Поиск
+            <input name="query" defaultValue={query} placeholder="ФИО или email" />
+          </label>
+          <button type="submit"><Icon name="search" /> Найти</button>
+        </form>
+        {error ? <p role="alert" className="error">{error}</p> : rows === null ? (
+          <p role="status" className="workflow-muted">Загрузка абитуриентов…</p>
+        ) : rows.length === 0 ? (
+          <WorkflowEmpty title="Абитуриентов по этим условиям нет" description="Измените параметры поиска или дождитесь новых регистраций." />
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table className="workflow-data-table">
+              <thead>
+                <tr>
+                  <th>ФИО</th>
+                  <th>Идентификатор</th>
+                  <th>Заявление</th>
+                  <th>Статус</th>
+                  <th>Документы</th>
+                  <th>Проверка документов</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const latest = row.applications.length > 0
+                    ? row.applications.reduce((best, item) => item.updated_at > best.updated_at ? item : best)
+                    : null;
+                  const documentsTotal = row.applications.reduce((sum, item) => sum + item.document_count, 0);
+                  const documentsPending = row.applications.reduce((sum, item) => sum + item.documents_pending, 0);
+                  return (
+                    <tr key={row.id}>
+                      <td>
+                        <button type="button" className="workflow-stat__action" aria-pressed={selected === row.id} onClick={() => setSelected(selected === row.id ? null : row.id)}>
+                          {row.last_name && row.first_name ? `${row.last_name} ${row.first_name}` : row.email}
+                        </button>
+                      </td>
+                      <td>№{row.id}</td>
+                      <td>{latest
+                        ? <>№{latest.id} · {latest.campaign_year}{row.applications.length > 1 ? ` · ещё ${row.applications.length - 1}` : ""}</>
+                        : <span className="workflow-muted">нет заявления</span>}</td>
+                      <td>{latest
+                        ? <WorkflowStatus status={latest.status}>{applicationStatus[latest.status as ApplicationStatus] ?? latest.status}</WorkflowStatus>
+                        : <span className="workflow-muted">—</span>}</td>
+                      <td>{documentsTotal}</td>
+                      <td>{!latest
+                        ? <span className="workflow-muted">—</span>
+                        : documentsPending > 0
+                          ? <WorkflowStatus status="warning">{documentsPending} ждут проверки</WorkflowStatus>
+                          : documentsTotal > 0
+                            ? <WorkflowStatus status="reviewed">Проверены</WorkflowStatus>
+                            : <span className="workflow-muted">Не приложены</span>}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+      {selected !== null && <StaffApplicantCardView key={selected} token={token} applicantId={selected} onOpenApplication={onOpenApplication} />}
+    </>
+  );
+}
+
+function StaffApplicantCardView({ token, applicantId, onOpenApplication }: {
+  token: string;
+  applicantId: number;
+  onOpenApplication: (email: string) => void;
+}) {
+  const [card, setCard] = useState<StaffApplicantCard | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+    setCard(null);
+    getStaffApplicantCard(token, applicantId).then((data) => {
+      if (!ignore) setCard(data);
+    }).catch((requestError) => {
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить карточку абитуриента"));
+    });
+    return () => { ignore = true; };
+  }, [token, applicantId]);
+
+  if (error) return <p className="error" role="alert">{error}</p>;
+  if (!card) return <p role="status" className="workflow-muted">Загружаем карточку абитуриента…</p>;
+
+  const { profile, applications, ege, achievements, history } = card;
+
+  return (
+    <section className="workflow-panel workflow-editor" aria-label="Карточка абитуриента">
+      <div className="workflow-panel-heading">
+        <div>
+          <h3>Абитуриент №{profile.id}</h3>
+          <p className="workflow-muted">
+            {[profile.last_name, profile.first_name].filter(Boolean).join(" ") || profile.email}
+            {!profile.is_active && " · учётная запись неактивна"}
+          </p>
+        </div>
+      </div>
+      <section className="workflow-subsection">
+        <h4>Личные данные и поступление</h4>
+        <dl className="workflow-staff-scores">
+          <div><dt>Email</dt><dd>{profile.email}</dd></div>
+          {profile.phone && <div><dt>Телефон</dt><dd>{profile.phone}</dd></div>}
+          {profile.target_program && <div><dt>Направление</dt><dd>{profile.target_program}</dd></div>}
+          {profile.admission_basis && <div><dt>Основание</dt><dd>{profile.admission_basis}</dd></div>}
+        </dl>
+      </section>
+      <section className="workflow-subsection">
+        <h4>Заявления</h4>
+        {applications.length === 0 && <p className="workflow-muted">Заявлений пока нет.</p>}
+        {applications.map((application) => (
+          <div key={application.id} className="workflow-document-review">
+            <div className="workflow-file-name">
+              <span className="workflow-mark"><Icon name="file" /></span>
+              <div>
+                <h5>№{application.id} · {application.program}</h5>
+                <small>{application.campaign_year} · {application.admission_basis} · документов: {application.document_count}
+                  {application.documents_pending > 0 ? ` (ждут проверки: ${application.documents_pending})` : ""}</small>
+              </div>
+              <WorkflowStatus status={application.status}>{applicationStatus[application.status as ApplicationStatus] ?? application.status}</WorkflowStatus>
+            </div>
+            <div className="workflow-actions">
+              <button className="workflow-secondary" type="button" onClick={() => onOpenApplication(profile.email)}>
+                Открыть заявление <Icon name="chevron-right" />
+              </button>
+            </div>
+          </div>
+        ))}
+      </section>
+      {ege.length > 0 && (
+        <section className="workflow-subsection">
+          <h4>Результаты ЕГЭ</h4>
+          {ege.map((entry) => (
+            <div key={entry.application_id} className="workflow-document-review">
+              <div className="workflow-file-name">
+                <div>
+                  <h5>Заявление №{entry.application_id}</h5>
+                  <small>{entry.synthetic_candidate_id ? `Тестовый реестр: ${entry.synthetic_candidate_id}` : "Синтетическая сверка ещё не выполнялась"}</small>
+                </div>
+              </div>
+              {entry.scores.length > 0
+                ? <dl className="workflow-staff-scores">{entry.scores.map((score) => (
+                  <div key={`${score.subject}-${score.year}`}>
+                    <dt>{score.subject} <small>{score.year}</small></dt>
+                    <dd>{score.score}</dd>
+                  </div>
+                ))}</dl>
+                : <p className="workflow-muted">Баллы ещё не введены.</p>}
+              {entry.verification && (
+                <WorkflowNotice variant={entry.verification.status === "match" ? "success" : "info"}>
+                  <p>{verificationLabel(entry.verification.status, entry.verification.missing_subjects, entry.verification.mismatched_subjects)}</p>
+                </WorkflowNotice>
+              )}
+            </div>
+          ))}
+        </section>
+      )}
+      <section className="workflow-subsection">
+        <h4>Индивидуальные достижения</h4>
+        {achievements.length === 0 && <p className="workflow-muted">Достижения не заявлены.</p>}
+        {achievements.map((item) => (
+          <div key={item.id} className="workflow-achievement-card">
+            <div className="workflow-achievement-card__head">
+              <span>№{item.id} · {item.title}</span>
+              <WorkflowStatus status={achievementTone[item.status]}>{achievementStatus[item.status]}</WorkflowStatus>
+            </div>
+            <div className="workflow-achievement-card__meta">
+              <span>{achievementCategory[item.category]}</span>
+              {item.level && <span>{achievementLevel[item.level]}</span>}
+              {item.organization && <span>{item.organization}</span>}
+            </div>
+          </div>
+        ))}
+      </section>
+      {history.length > 0 && (
+        <section className="workflow-subsection">
+          <h4>История проверок и изменений</h4>
+          <ol className="workflow-activity">
+            {history.map((entry) => (
+              <li key={`${entry.source}-${entry.reference_id}-${entry.created_at}`} className="workflow-activity-item">
+                <time dateTime={entry.created_at}>{dateLabel(entry.created_at)}</time>
+                <div>
+                  {entry.source === "application"
+                    ? <>Заявление №{entry.reference_id}: <strong>{feedAction[entry.action] ?? entry.action}</strong></>
+                    : <>Достижение №{entry.reference_id}: <strong>{feedAction[entry.action] ?? entry.action}</strong></>}
+                  {entry.note && <small>{entry.note}</small>}
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
       )}
     </section>
   );
+}
+
+function verificationLabel(status: string, missing: string[], mismatched: string[]) {
+  switch (status) {
+    case "match": return "Синтетическая сверка: баллы совпадают с тестовым реестром.";
+    case "mismatch": return `Синтетическая сверка: различия по предметам ${mismatched.join(", ") || "—"}.`;
+    case "not_found": return "Синтетическая сверка: запись в тестовом реестре не найдена.";
+    case "incomplete": return `Синтетическая сверка: не хватает предметов ${missing.join(", ") || "—"}.`;
+    default: return `Синтетическая сверка: ${status}.`;
+  }
+}
+
+function StaffAchievementsQueue({ token }: { token: string }) {
+  const [filters, setFilters] = useState({ status: "pending", category: "", q: "" });
+  const [items, setItems] = useState<AchievementItem[] | null>(null);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+    setItems(null);
+    getStaffAchievements(token, filters).then((list) => {
+      if (!ignore) setItems(list);
+    }).catch((requestError) => {
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить очередь достижений"));
+    });
+    return () => { ignore = true; };
+  }, [token, filters]);
+
+  const applyFilters = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const values = new FormData(event.currentTarget);
+    setSelected(null);
+    setFilters({
+      status: String(values.get("status") ?? "pending"),
+      category: String(values.get("category") ?? ""),
+      q: String(values.get("q") ?? "").trim()
+    });
+  };
+
+  return (
+    <>
+      <section className="workflow-panel workflow-queue" aria-labelledby="achievements-heading">
+        <div className="workflow-panel-heading">
+          <h3 id="achievements-heading">Проверка индивидуальных достижений</h3>
+          {items && items.length > 0 && <span className="workflow-count">{items.length}</span>}
+        </div>
+        <form className="workflow-queue-filter" onSubmit={applyFilters}>
+          <label>
+            Статус
+            <select name="status" defaultValue={filters.status}>
+              <option value="pending">На проверке</option>
+              <option value="">Все статусы</option>
+              <option value="draft">Черновик</option>
+              <option value="needs_revision">Требует исправления</option>
+              <option value="rejected">Отклонено</option>
+              <option value="confirmed">Подтверждено</option>
+            </select>
+          </label>
+          <label>
+            Категория
+            <select name="category" defaultValue={filters.category}>
+              <option value="">Все категории</option>
+              {(Object.keys(achievementCategory) as AchievementCategory[]).map((value) => (
+                <option key={value} value={value}>{achievementCategory[value]}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Поиск
+            <input name="q" defaultValue={filters.q} placeholder="Название или абитуриент" />
+          </label>
+          <button type="submit"><Icon name="search" /> Найти</button>
+        </form>
+        {error && <p className="error" role="alert">{error}</p>}
+        {items === null && <p role="status" className="workflow-muted">Загружаем очередь достижений…</p>}
+        {items !== null && items.length === 0 && (
+          <WorkflowEmpty icon="file" title="Достигновений по этим условиям нет"
+            description="Измените параметры поиска или дождитесь новых подач." />
+        )}
+        {items !== null && items.length > 0 && (
+          <ul className="workflow-list workflow-queue-list">
+            {items.map((item) => (
+              <li key={item.id}>
+                <button className="workflow-queue-row" type="button" aria-pressed={selected === item.id} onClick={() => setSelected(item.id)}>
+                  <span className="workflow-mark"><Icon name="badge" /></span>
+                  <span className="workflow-row-main">
+                    <span>№{item.id} · {item.title}</span>
+                    <small>{achievementCategory[item.category]}{item.level ? ` · ${achievementLevel[item.level]}` : ""}</small>
+                  </span>
+                  <WorkflowStatus status={achievementTone[item.status]}>{achievementStatus[item.status]}</WorkflowStatus>
+                  <Icon name="chevron-right" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+      {selected !== null && <StaffAchievementDetail key={selected} token={token} id={selected} />}
+    </>
+  );
+}
+
+function StaffAchievementDetail({ token, id }: { token: string; id: number }) {
+  const [card, setCard] = useState<StaffAchievementCard | null>(null);
+  const [comment, setComment] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let ignore = false;
+    setCard(null);
+    getStaffAchievementCard(token, id).then((data) => {
+      if (!ignore) setCard(data);
+    }).catch((requestError) => {
+      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить карточку достижения"));
+    });
+    return () => { ignore = true; };
+  }, [token, id]);
+
+  const run = async (task: () => Promise<void>) => {
+    setError("");
+    setPending(true);
+    try {
+      await task();
+    } catch (requestError) {
+      setError(requestErrorMessage(requestError, "Не удалось выполнить действие"));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const decide = (action: "confirmed" | "rejected" | "needs_revision") => {
+    if (action !== "confirmed" && !comment.trim()) {
+      setError("Для отклонения или запроса исправления комментарий обязателен.");
+      return;
+    }
+    const phrases: Record<typeof action, string> = {
+      confirmed: "Подтвердить достижение?",
+      rejected: "Отклонить достижение? Абитуриент увидит ваш комментарий.",
+      needs_revision: "Запросить исправление? Абитуриент сможет исправить сведения и повторно подать достижение."
+    };
+    if (!window.confirm(phrases[action])) return;
+    return run(async () => {
+      const updated = await reviewAchievement(token, id, action, comment.trim());
+      setCard(updated);
+      setComment("");
+    });
+  };
+
+  const download = () => run(async () => {
+    const blob = await downloadAchievementDocument(token, id);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = card?.document?.filename ?? "evidence";
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+
+  if (error && !card) return <p className="error" role="alert">{error}</p>;
+  if (!card) return <p role="status" className="workflow-muted">Загружаем карточку достижения…</p>;
+
+  return (
+    <section className="workflow-panel workflow-editor" aria-label={`Достижение ${card.id}`}>
+      <div className="workflow-panel-heading">
+        <div>
+          <h3>Достижение №{card.id} · {card.title}</h3>
+          <p className="workflow-muted">
+            {[card.applicant.last_name, card.applicant.first_name].filter(Boolean).join(" ") || card.applicant.email}
+            {` · ${card.applicant.email}`}
+          </p>
+        </div>
+        <WorkflowStatus status={achievementTone[card.status]}>{achievementStatus[card.status]}</WorkflowStatus>
+      </div>
+      {error && <p className="error" role="alert">{error}</p>}
+      <dl className="workflow-staff-scores">
+        <div><dt>Категория</dt><dd>{achievementCategory[card.category]}</dd></div>
+        {card.level && <div><dt>Уровень</dt><dd>{achievementLevel[card.level]}</dd></div>}
+        <div><dt>Дата получения</dt><dd>{new Date(card.achieved_on).toLocaleDateString("ru-RU")}</dd></div>
+        {card.organization && <div><dt>Организация</dt><dd>{card.organization}</dd></div>}
+        {card.application_id && <div><dt>Заявление</dt><dd>№{card.application_id}</dd></div>}
+        {card.submitted_at && <div><dt>Подано на проверку</dt><dd>{dateLabel(card.submitted_at)}</dd></div>}
+      </dl>
+      {card.description && <p className="workflow-muted">{card.description}</p>}
+      {card.document ? (
+        <div className="workflow-actions">
+          <span className="workflow-mark"><Icon name="file" /></span>
+          <span>{card.document.filename}</span>
+          <button className="workflow-secondary" type="button" disabled={pending} onClick={download}>Скачать файл</button>
+        </div>
+      ) : <p className="workflow-muted">Подтверждающий документ не приложен.</p>}
+
+      {card.status === "pending" ? (
+        <section className="workflow-subsection">
+          <h4>Решение сотрудника</h4>
+          <label>
+            Комментарий (обязателен для отклонения и запроса исправления)
+            <textarea value={comment} rows={3} maxLength={2000} placeholder="Комментарий виден абитуриенту"
+              onChange={(event) => setComment(event.target.value)} />
+          </label>
+          <div className="workflow-actions">
+            <button type="button" disabled={pending} onClick={() => decide("confirmed")}><Icon name="check" /> Подтвердить</button>
+            <button className="workflow-secondary" type="button" disabled={pending} onClick={() => decide("needs_revision")}>Запросить исправление</button>
+            <button className="workflow-secondary" type="button" disabled={pending} onClick={() => decide("rejected")}>Отклонить</button>
+          </div>
+        </section>
+      ) : (
+        card.review_comment && (
+          <WorkflowNotice variant={card.status === "confirmed" ? "success" : "info"}>
+            <strong>Решение от {card.reviewed_at ? dateLabel(card.reviewed_at) : "—"}</strong>
+            <p>{card.review_comment}</p>
+          </WorkflowNotice>
+        )
+      )}
+
+      <details className="workflow-disclosure">
+        <summary>История решений</summary>
+        {card.history.length === 0
+          ? <p className="workflow-muted">Решений ещё не было.</p>
+          : (
+            <ol className="workflow-timeline">
+              {card.history.map((entry) => (
+                <li key={entry.id}>
+                  <span className="workflow-timeline-dot" />
+                  <div>
+                    <strong>{decisionLabel(entry.action)}</strong>
+                    <time dateTime={entry.created_at}>{dateLabel(entry.created_at)}</time>
+                    {entry.comment && <p>{entry.comment}</p>}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          )}
+      </details>
+    </section>
+  );
+}
+
+function decisionLabel(action: string) {
+  switch (action) {
+    case "created": return "Создано";
+    case "updated": return "Изменено";
+    case "submitted": return "Отправлено на проверку";
+    case "resubmitted": return "Повторно отправлено на проверку";
+    case "confirmed": return "Подтверждено";
+    case "rejected": return "Отклонено";
+    case "needs_revision": return "Запрошено исправление";
+    default: return action;
+  }
 }
 
 function StaffApplicationDetail({ token, id, onUpdate }: {

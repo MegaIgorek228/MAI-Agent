@@ -910,3 +910,209 @@
     grid-column: 2;
   }
 }
+
+/* --- Staff dashboard ------------------------------------------------------ */
+
+.workflow-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+  gap: 12px;
+}
+
+.workflow-stat {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 15px 16px;
+  background: var(--workflow-recess);
+  border: 1px solid var(--workflow-outline);
+  border-radius: var(--workflow-control-radius);
+}
+
+.workflow-stat--attention {
+  border-color: #b98a2e;
+  background: #fbf4e4;
+}
+
+.workflow-stat__value {
+  font-family: var(--display-type);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+}
+
+.workflow-stat__label {
+  color: var(--muted);
+  font-size: .85rem;
+  line-height: 1.35;
+}
+
+.workflow-stat__action {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workflow-stat__action:hover { text-decoration: underline; }
+
+.workflow-activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-activity-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--workflow-recess);
+  border: 1px solid var(--workflow-outline);
+  border-radius: var(--workflow-control-radius);
+}
+
+.workflow-activity-item time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: .8rem;
+  white-space: nowrap;
+}
+
+.workflow-activity-item div {
+  min-width: 0;
+}
+
+.workflow-activity-item small {
+  display: block;
+  color: var(--muted);
+}
+
+/* --- Data tables ---------------------------------------------------------- */
+
+.workflow-data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .9rem;
+}
+
+.workflow-data-table th,
+.workflow-data-table td {
+  padding: 9px 10px;
+  text-align: start;
+  border-bottom: 1px solid var(--workflow-outline);
+  vertical-align: top;
+}
+
+.workflow-data-table th {
+  color: var(--muted);
+  font-size: .78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.workflow-data-table tbody tr:hover { background: var(--workflow-recess); }
+
+/* --- Achievements ---------------------------------------------------------- */
+
+.workflow-achievement-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.workflow-achievement-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  background: var(--workflow-recess);
+  border: 1px solid var(--workflow-outline);
+  border-radius: var(--workflow-control-radius);
+}
+
+.workflow-achievement-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.workflow-achievement-card__head > span {
+  font-weight: 650;
+}
+
+.workflow-achievement-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  color: var(--muted);
+  font-size: .84rem;
+}
+
+.workflow-achievement-card__comment {
+  padding: 9px 12px;
+  background: var(--workflow-panel-fill);
+  border: 1px solid var(--workflow-outline);
+  border-radius: var(--workflow-control-radius);
+  font-size: .9rem;
+}
+
+.workflow-achievement-form {
+  display: grid;
+  gap: 14px;
+}
+
+.workflow-achievement-form .form-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+/* --- Registration role switch ---------------------------------------------- */
+
+.auth-roles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.auth-role {
+  padding: 10px 12px;
+  background: #f3f4f1;
+  border: 1.5px solid #cfd3cd;
+  border-radius: 9px;
+  color: #3c4038;
+  font-size: .88rem;
+  font-weight: 600;
+  line-height: 1.3;
+  cursor: pointer;
+  transition: background 120ms, border-color 120ms;
+}
+
+.auth-role--active {
+  background: #1c2b3a;
+  border-color: #1c2b3a;
+  color: #fff;
+}
+
+.auth-invite-hint {
+  display: block;
+  margin-top: 6px;
+  color: #6a6f68;
+  font-size: .78rem;
+  line-height: 1.4;
+}

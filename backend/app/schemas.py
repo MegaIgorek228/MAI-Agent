@@ -8,6 +8,10 @@ from app.models import UserRole
 class UserCreate(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
+    # A staff registration code is optional and validated exclusively on the
+    # backend. There is deliberately no "role" field: the role is derived
+    # from a valid invitation only.
+    invite_code: str | None = Field(default=None, max_length=64)
 
 
 class UserResponse(BaseModel):

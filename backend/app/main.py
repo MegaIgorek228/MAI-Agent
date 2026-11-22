@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.db import engine
 from app.hermes_client import hermes_manager
 from app.mcp_tools import mcp
-from app.routers import admissions, applicants, auth, chat, knowledge, users
+from app.routers import achievements, admissions, applicants, auth, chat, knowledge, staff, users
 from app.telegram_service import telegram_service
 
 # uvicorn's default logging config covers only "uvicorn*" loggers; without an
@@ -51,6 +51,8 @@ app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(applicants.router)
 app.include_router(admissions.router)
+app.include_router(achievements.router)
+app.include_router(staff.router)
 app.include_router(knowledge.router)
 app.include_router(chat.router)
 

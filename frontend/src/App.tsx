@@ -18,11 +18,12 @@ import {
 } from "./api";
 import type { ChatMessage, ChatSession, DocumentItem, Profile, User } from "./api";
 import { ApplicantApplications } from "./Admissions";
+import { Achievements } from "./Achievements";
 import { AssistantWorkspace } from "./AssistantWorkspace";
 import { Cockpit } from "./Cockpit";
 import { Documents, requestErrorMessage } from "./Documents";
 import { AuthScreen, HomePage, ProfilePage, Workspace, isStaff } from "./Portal";
-import type { AuthMode, View } from "./Portal";
+import type { AuthMode, RegisterType, View } from "./Portal";
 import { StaffApplications } from "./StaffApplications";
 import "./styles.css";
 
@@ -34,6 +35,7 @@ const viewHashes: Record<View, string> = {
   profile: "#seat",
   documents: "#cockpit",
   applications: "#applications",
+  achievements: "#achievements",
   staff: "#staff",
   agent: "#cabin",
 };
@@ -45,7 +47,7 @@ function readView(): View {
 
 function canOpenView(user: User, view: View) {
   if (view === "staff") return isStaff(user);
-  if (view === "applications") return user.role === "applicant";
+  if (view === "applications" || view === "achievements") return user.role === "applicant";
   if (view === "documents") return user.role !== "student";
   return true;
 }
@@ -71,6 +73,8 @@ export function App() {
   const [mode, setMode] = useState<AuthMode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [registerType, setRegisterType] = useState<RegisterType>("applicant");
+  const [inviteCode, setInviteCode] = useState("");
   const [authPending, setAuthPending] = useState(false);
   const [token, setToken] = useState(readSessionToken);
   const [user, setUser] = useState<User | null>(null);
@@ -105,7 +109,10 @@ export function App() {
     setAuthPending(true);
 
     try {
-      if (mode === "register") await register(email, password);
+      if (mode === "register") {
+        await register(email, password, registerType === "staff" ? inviteCode : undefined);
+        setInviteCode("");
+      }
       const response = await login(email, password);
       storeSessionToken(response.access_token);
       setPassword("");
@@ -149,8 +156,12 @@ export function App() {
   }
 
   return <AuthScreen mode={mode} email={email} password={password} error={error} pending={authPending}
-    onEmailChange={setEmail} onPasswordChange={setPassword} onSubmit={submit} onModeChange={() => {
+    registerType={registerType} inviteCode={inviteCode}
+    onEmailChange={setEmail} onPasswordChange={setPassword}
+    onRegisterTypeChange={setRegisterType} onInviteCodeChange={setInviteCode}
+    onSubmit={submit} onModeChange={() => {
       setError("");
+      setInviteCode("");
       setMode((current) => current === "login" ? "register" : "login");
     }} />;
 }
@@ -396,6 +407,9 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
       )}
       {view === "applications" && user.role === "applicant" && (
         <ApplicantApplications key={token} token={token} documents={documents} profile={profile} />
+      )}
+      {view === "achievements" && user.role === "applicant" && (
+        <Achievements key={token} token={token} />
       )}
       {view === "staff" && isStaff(user) && <StaffApplications key={token} token={token} />}
       {view === "agent" && <AssistantWorkspace token={token} sessionId={chatSessionId}

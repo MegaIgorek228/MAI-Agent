@@ -12,7 +12,8 @@ from app.schemas import (
 from app.security import create_access_token
 from app.services import authenticate_user, get_user_by_email, register_user
 from app.dependencies import get_current_user
-from app.models import TelegramIdentity, User
+from app.invite_service import InviteError, mark_invite_used, redeem_staff_invite
+from app.models import TelegramIdentity, User, UserRole
 from datetime import UTC, datetime, timedelta
 import secrets
 from sqlalchemy import select
@@ -24,7 +25,27 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 def register(payload: UserCreate, db: Session = Depends(get_db)) -> UserResponse:
     if get_user_by_email(db, payload.email) is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already registered")
-    return register_user(db, payload.email, payload.password)
+    role = UserRole.applicant.value
+    invite = None
+    invite_code = (payload.invite_code or "").strip()
+    if invite_code:
+        # Invalid, expired, used and revoked codes are indistinguishable to
+        # the caller — the generic message below does not reveal which one it is.
+        try:
+            invite = redeem_staff_invite(db, invite_code)
+        except InviteError:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Код приглашения недействителен",
+            )
+        role = UserRole.admissions_staff.value
+    user = register_user(db, payload.email, payload.password, role=role)
+    if invite is not None:
+        mark_invite_used(db, invite, user)
+    db.commit()
+    db.refresh(user)
+    return user
 
 
 @router.post("/login", response_model=TokenResponse)

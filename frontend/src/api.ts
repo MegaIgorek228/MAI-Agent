@@ -176,10 +176,10 @@ export type TelegramPairingCode = {
   expires_at: string;
 };
 
-export const register = (email: string, password: string) =>
+export const register = (email: string, password: string, inviteCode?: string) =>
   apiRequest<User>("/auth/register", {
     method: "POST",
-    body: JSON.stringify({ email, password })
+    body: JSON.stringify({ email, password, invite_code: inviteCode || null })
   });
 
 export const login = (email: string, password: string) =>
@@ -221,10 +221,231 @@ export const uploadDocument = (token: string, file: File, documentType: string) 
   });
 };
 
-export const getStaffApplicants = (token: string) =>
-  apiRequest<Applicant[]>("/applicant/staff/applicants", {
+export const getStaffApplicants = (token: string, query: string) =>
+  apiRequest<StaffApplicantRow[]>(`/applicant/staff/applicants?limit=100&${query ? `q=${encodeURIComponent(query)}` : ""}`, {
     headers: { Authorization: `Bearer ${token}` }
   });
+
+export const getStaffApplicantCard = (token: string, applicantId: number) =>
+  apiRequest<StaffApplicantCard>(`/applicant/staff/applicants/${applicantId}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+// --- Individual achievements ------------------------------------------------
+
+export type AchievementCategory = "olympiad" | "sport" | "gto" | "volunteering" | "creative" | "other";
+export type AchievementLevel = "school" | "municipal" | "regional" | "national" | "international";
+export type AchievementStatus = "draft" | "pending" | "confirmed" | "rejected" | "needs_revision";
+
+export type AchievementItem = {
+  id: number;
+  applicant_id: number;
+  application_id: number | null;
+  category: AchievementCategory;
+  title: string;
+  level: AchievementLevel | null;
+  achieved_on: string;
+  organization: string | null;
+  description: string | null;
+  status: AchievementStatus;
+  document: {
+    id: number;
+    filename: string;
+    content_type: string;
+    size_bytes: number;
+    created_at: string;
+  } | null;
+  submitted_at: string | null;
+  review_comment: string | null;
+  reviewed_by: number | null;
+  reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AchievementReviewEntry = {
+  id: number;
+  action: string;
+  comment: string | null;
+  actor_id: number | null;
+  created_at: string;
+};
+
+export type StaffAchievementCard = AchievementItem & {
+  applicant: { id: number; email: string; first_name: string | null; last_name: string | null };
+  history: AchievementReviewEntry[];
+};
+
+export type StaffDashboardData = {
+  applicants_total: number;
+  applications_in_work: number;
+  applications_awaiting_review: number;
+  documents_awaiting_review: number;
+  achievements_awaiting_review: number;
+  recent_activity: Array<{
+    source: "application" | "achievement";
+    reference_id: number;
+    action: string;
+    note: string | null;
+    actor_id: number | null;
+    created_at: string;
+  }>;
+};
+
+export type StaffApplicantApplication = {
+  id: number;
+  campaign_year: number;
+  program: string;
+  admission_basis: string;
+  status: string;
+  document_count: number;
+  documents_pending: number;
+  updated_at: string;
+};
+
+export type StaffApplicantRow = {
+  id: number;
+  email: string;
+  is_active: boolean;
+  first_name: string | null;
+  last_name: string | null;
+  created_at: string;
+  applications: StaffApplicantApplication[];
+};
+
+export type StaffApplicantCard = {
+  profile: {
+    id: number;
+    email: string;
+    is_active: boolean;
+    first_name: string | null;
+    last_name: string | null;
+    phone: string | null;
+    target_program: string | null;
+    admission_basis: string | null;
+  };
+  applications: StaffApplicantApplication[];
+  ege: Array<{
+    application_id: number;
+    synthetic_candidate_id: string | null;
+    scores: Array<{ subject: string; year: number; score: number }>;
+    verification: {
+      status: string;
+      missing_subjects: string[];
+      mismatched_subjects: string[];
+      verified_at: string;
+    } | null;
+  }>;
+  achievements: AchievementItem[];
+  history: Array<{
+    source: "application" | "achievement";
+    reference_id: number;
+    action: string;
+    note: string | null;
+    actor_id: number | null;
+    created_at: string;
+  }>;
+};
+
+export const getStaffDashboard = (token: string) =>
+  apiRequest<StaffDashboardData>("/applicant/staff/dashboard", {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+const achievementParams = (params: Record<string, string | number | undefined>) => {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") search.set(key, String(value));
+  }
+  const query = search.toString();
+  return query ? `?${query}` : "";
+};
+
+export const getAchievements = (token: string) =>
+  apiRequest<AchievementItem[]>("/applicant/achievements", {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+export const createAchievement = (token: string, values: {
+  category: AchievementCategory;
+  title: string;
+  level: AchievementLevel | null;
+  achieved_on: string;
+  organization: string | null;
+  description: string | null;
+  application_id: number | null;
+  document_id: number | null;
+}) =>
+  apiRequest<AchievementItem>("/applicant/achievements", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify(values)
+  });
+
+export const updateAchievement = (
+  token: string,
+  id: number,
+  values: Partial<{
+    category: AchievementCategory;
+    title: string;
+    level: AchievementLevel | null;
+    achieved_on: string;
+    organization: string | null;
+    description: string | null;
+    application_id: number | null;
+    document_id: number | null;
+  }>
+) =>
+  apiRequest<AchievementItem>(`/applicant/achievements/${id}`, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify(values)
+  });
+
+export const submitAchievement = (token: string, id: number) =>
+  apiRequest<AchievementItem>(`/applicant/achievements/${id}/submit`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+export const getAchievementHistory = (token: string, id: number) =>
+  apiRequest<AchievementReviewEntry[]>(`/applicant/achievements/${id}/history`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+export const getStaffAchievements = (
+  token: string,
+  filters: { status?: string; category?: string; q?: string; limit?: number; offset?: number }
+) =>
+  apiRequest<AchievementItem[]>(
+    `/applicant/staff/achievements${achievementParams({ ...filters, limit: filters.limit ?? 50, offset: filters.offset ?? 0 })}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+
+export const getStaffAchievementCard = (token: string, id: number) =>
+  apiRequest<StaffAchievementCard>(`/applicant/staff/achievements/${id}`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+
+export const reviewAchievement = (
+  token: string,
+  id: number,
+  action: "confirmed" | "rejected" | "needs_revision",
+  comment: string
+) =>
+  apiRequest<StaffAchievementCard>(`/applicant/staff/achievements/${id}/review`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: JSON.stringify({ action, comment: comment || null })
+  });
+
+export const downloadAchievementDocument = async (token: string, achievementId: number) => {
+  const response = await apiFetch(`/applicant/staff/achievements/${achievementId}/document/file`, {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  return response.blob();
+};
+
 
 export const getDocumentCompleteness = (token: string) =>
   apiRequest<DocumentCompleteness>("/applicant/documents/completeness", {
