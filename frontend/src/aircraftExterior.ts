@@ -536,27 +536,23 @@ export function createAircraftExterior(): { body: THREE.Group; panels: THREE.Gro
   const bodySeams: THREE.BufferGeometry[] = [];
   const panelSeams: THREE.BufferGeometry[] = [];
   const forwardDoor = (boardingDoor.left + boardingDoor.right) / 2;
+  const boardingDoorOutline = roundedPanel(forwardDoor, (boardingDoor.top + boardingDoor.sill) / 2, .746, 1.464, .10);
+  const aftWindowGap: Span = [5.69, 6.47];
+  const windowFrameWidth = .174;
   for (const side of [1, -1]) {
-    const doors = [forwardDoor, 6.08];
     for (let x = -5.02; x < 6.52; x += .46) {
-      if ((x > .61 && x < 1.28) || doors.some((door) => Math.abs(x - door) < .39)) continue;
+      const overlapsBoardingDoor = x + windowFrameWidth / 2 > boardingDoor.left && x - windowFrameWidth / 2 < boardingDoor.right;
+      const inAftWindowGap = x > aftWindowGap[0] && x < aftWindowGap[1];
+      if ((x > .61 && x < 1.28) || inAftWindowGap || overlapsBoardingDoor) continue;
       const covered = side === 1 && openings.some(([left, right]) => x > left && x < right);
-      (covered ? panelSeals : bodySeals).push(projectedShape(roundedPanel(x, .32, .174, .282, .075), side, .010));
+      (covered ? panelSeals : bodySeals).push(projectedShape(roundedPanel(x, .32, windowFrameWidth, .282, .075), side, .010));
       (covered ? panelWindows : bodyWindows).push(projectedShape(roundedPanel(x, .32, .155, .258, .066), side, .017));
     }
-    for (const x of doors) {
-      const boarding = x === forwardDoor;
-      const covered = boarding && side === 1;
-      const door = boarding
-        ? roundedPanel(x, (boardingDoor.top + boardingDoor.sill) / 2, .746, 1.464, .10)
-        : roundedPanel(x, .15, .58, 1.32, .111);
-      const outlines = covered ? panelSeams : bodySeams;
-      const glazings = covered ? panelWindows : bodyWindows;
-      (covered ? panelHatches : bodyHatches).push(projectedShape(door, side, .009));
-      outlines.push(skinOutline(door, side, .0065));
-      glazings.push(projectedShape(roundedPanel(x, .40, .115, .175, .047), side, .022));
-      (covered ? panelSeals : bodySeals).push(projectedShape(roundedPanel(x + .128, .01, .142, .048, .017), side, .024));
-    }
+    const boardingDoorCovered = side === 1;
+    (boardingDoorCovered ? panelHatches : bodyHatches).push(projectedShape(boardingDoorOutline, side, .009));
+    (boardingDoorCovered ? panelSeams : bodySeams).push(skinOutline(boardingDoorOutline, side, .0065));
+    (boardingDoorCovered ? panelWindows : bodyWindows).push(projectedShape(roundedPanel(forwardDoor, .40, .115, .175, .047), side, .022));
+    (boardingDoorCovered ? panelSeals : bodySeals).push(projectedShape(roundedPanel(forwardDoor + .128, .01, .142, .048, .017), side, .024));
     for (const [x, width] of [[-4.34, 1.26], [3.54, 1.60]]) {
       const cargo = roundedPanel(x, -.853, width, .357, .068);
       bodyHatches.push(projectedShape(cargo, side, .009));
