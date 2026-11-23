@@ -172,42 +172,82 @@ _install_mai_httpx_fix()
 # detours, the web tools had no paid API keys, and skill_manage triggered a
 # slow post-turn background skill review (~100 s model calls).
 #
-# 2026-11-23: the product concept changed — MAI-Agent is now a plain Hermes
-# Agent with its native toolset (user requirement). The preset is re-scoped to
-# the native surface the concept asks for, without the expensive extras:
-#   - terminal / process        — terminal commands
-#   - read_file / write_file /
-#     patch / search_files      — filesystem
-#   - execute_code              — local code execution
-#   - memory                    — MEMORY.md persistent memory
-#   - session_search            — conversation history
-#   - todo                      — task planning
-# Still excluded and why:
-#   - web_search / web_extract  — need paid search/extract API keys that are
-#     absent; page fetching stays on the Backend MCP tool `fetch_web_page`;
-#   - browser_*                 — no Node/Chromium in the container;
-#   - skills_* / skill_manage   — re-enables the post-turn background
-#     skill review (~100 s extra model calls per turn);
-#   - delegate_task             — subagent fan-out, not needed here;
-#   - vision_analyze            — images go natively to the model
-#     (agent.image_input_mode: native).
-# Session MCP tools (fetch_web_page, sql_query, ФИС ГИА, ...) are registered
-# per ACP session and are NOT gated by this toolset — they stay available.
+# 2026-11-23: re-scoped to a 10-tool native surface (terminal, files, code,
+# memory, session_search, todo) per the product concept.
+#
+# 2026-11-23 (final, user decision): ALL Hermes functions are enabled. The
+# preset is now the FULL tool registry (every tool the installed hermes-agent
+# knows, resolved dynamically so future tools are included automatically).
+# Tools whose availability requirements are not met in this environment
+# (browser without Chromium, x_search without xAI credentials, spotify,
+# discord, feishu, homeassistant, yuanbao, kanban, GUI-only project tools,
+# ...) are NOT hard errors: each tool's own check_fn marks it unavailable
+# for the turn (tools/registry.py: "dependent tools will be unavailable").
+# Session MCP tools (fetch_web_page, sql_query, ФИС ГИА) are registered per
+# ACP session and are not gated by this toolset — they stay available.
 def _install_mai_acp_toolset_override() -> None:
     try:
-        from toolsets import TOOLSETS
+        import toolsets as _toolsets_mod
     except Exception:
         return
-    preset = TOOLSETS.get("hermes-acp")
+    preset = _toolsets_mod.TOOLSETS.get("hermes-acp")
     if not isinstance(preset, dict):
         return
-    preset["tools"] = [
-        "terminal", "process",
-        "read_file", "write_file", "patch", "search_files",
-        "execute_code",
-        "memory", "session_search", "todo",
-    ]
+
+    def _all_tools() -> list:
+        """Full tool registry, resolved at call time (the registry is only
+        complete after all tool modules have been imported, which happens
+        after plugin load)."""
+        try:
+            from model_tools import get_all_tool_names
+
+            names = list(get_all_tool_names())
+        except Exception:
+            names = []
+        for name in (
+            "terminal", "process",
+            "read_file", "write_file", "patch", "search_files",
+            "execute_code",
+            "memory", "session_search", "todo",
+        ):
+            if name not in names:
+                names.append(name)
+        return names
+
+    # Static preset: best available at plugin-load time (fallback for callers
+    # that read TOOLSETS['hermes-acp']['tools'] directly).
+    preset["tools"] = _all_tools()
     preset["includes"] = []
+
+    # Lazy completion: at session-build time (model_tools._compute_tool
+    # definitions → resolve_toolset("hermes-acp")) return the FULL registry
+    # so every installed tool is enabled, whatever the plugin-load-time
+    # registry state was.
+    _orig_resolve = _toolsets_mod.resolve_toolset
+    if not getattr(_orig_resolve, "_mai_full_toolset_wrapped", False):
+
+        def _wrapped_resolve(name, visited=None, *, include_registry=True):
+            result = list(
+                _orig_resolve(name, visited, include_registry=include_registry)
+            )
+            if name == "hermes-acp":
+                try:
+                    extra = _all_tools()
+                    result = list(dict.fromkeys([*result, *extra]))
+                except Exception:
+                    pass
+            return result
+
+        _wrapped_resolve._mai_full_toolset_wrapped = True
+        _toolsets_mod.resolve_toolset = _wrapped_resolve
+
+    # model_tools binds resolve_toolset by name at import time — if it is
+    # already imported, rebind the wrapper there too.
+    import sys as _sys
+
+    _mt = _sys.modules.get("model_tools")
+    if _mt is not None:
+        _mt.resolve_toolset = _toolsets_mod.resolve_toolset
 
 
 _install_mai_acp_toolset_override()
