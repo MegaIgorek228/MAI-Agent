@@ -1,4 +1,5 @@
 import ipaddress
+import re
 import socket
 from datetime import date
 from typing import Annotated
@@ -9,6 +10,7 @@ from fastapi.encoders import jsonable_encoder
 from fastmcp import Context, FastMCP
 from jwt import InvalidTokenError
 from pydantic import Field
+from sqlalchemy import text
 
 from app.admissions_schemas import (
     ApplicationCreate, ApplicationStatus, ApplicationUpdate, CampaignYear, EgeInput,
@@ -373,3 +375,73 @@ def fetch_web_page(url: str, section_query: str | None = None) -> str:
     if len(text) > _FETCH_MAX_OUTPUT_CHARS:
         text = text[:_FETCH_MAX_OUTPUT_CHARS] + "\n... [truncated]"
     return f"Source: {resp.url}\nTitle: {title or resp.url}\n\n{text}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SQL tool: read-only access to the MAI data store (second external data source)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Tables that hold personal account data / secrets: never exposed to the agent.
+_SQL_FORBIDDEN_TABLES = {"users", "staff_invites"}
+_SQL_READONLY_RE = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
+_SQL_TABLE_REF_RE = re.compile(r"\b(?:from|join)\s+[`\"']?(\w+)", re.IGNORECASE)
+_SQL_MAX_ROWS = 500
+
+
+def _validate_readonly_sql(sql: str) -> str:
+    """Validate and normalise a SQL statement: single read-only SELECT/WITH."""
+    statement = (sql or "").strip().rstrip(";").strip()
+    if not statement:
+        raise ValueError("Empty SQL statement")
+    if ";" in statement:
+        raise ValueError("Only a single SQL statement is allowed")
+    if not _SQL_READONLY_RE.match(statement):
+        raise ValueError("Only SELECT or WITH ... SELECT statements are allowed")
+    for match in _SQL_TABLE_REF_RE.finditer(statement):
+        if match.group(1).lower() in _SQL_FORBIDDEN_TABLES:
+            raise ValueError(f"Access to table '{match.group(1)}' is not allowed")
+    return statement
+
+
+def run_readonly_sql(db, statement: str, limit: int = 100) -> dict[str, object]:
+    """Execute a validated read-only SELECT and return JSON-friendly rows."""
+    result = db.execute(text(statement))
+    try:
+        columns = list(result.keys())
+    except Exception:
+        columns = []
+    rows_limit = max(1, min(int(limit or 100), _SQL_MAX_ROWS))
+    rows = [dict(row._mapping) for row in result.fetchmany(rows_limit)]
+    db.rollback()  # read-only posture: never commit an agent-initiated transaction
+    return {
+        "columns": columns,
+        "rows": jsonable_encoder(rows),
+        "row_count": len(rows),
+        "limit": rows_limit,
+    }
+
+
+@mcp.tool
+def sql_query(sql: str, limit: int = 100) -> dict[str, object]:
+    """Run a read-only SQL SELECT query against the MAI data store.
+
+    Available data:
+    - knowledge_sources / knowledge_chunks — official admission materials
+      (text, url, published date);
+    - synthetic_ege_candidates / synthetic_ege_results — the synthetic
+      ФИС ГИА registry (people, subjects, scores);
+    - applications / applicant_profiles / admission_rule_sets /
+      admission_requirements — admissions campaign data.
+
+    Only a single SELECT or WITH ... SELECT statement is allowed (no INSERT,
+    UPDATE, DELETE, DDL, no multiple statements). Account tables (users,
+    staff_invites) are not accessible. Results are returned as JSON with
+    column names and rows (capped at 500 rows).
+
+    Args:
+        sql: the SELECT statement to execute.
+        limit: maximum number of rows to return (default 100, max 500).
+    """
+    statement = _validate_readonly_sql(sql)
+    with mcp_operation() as (db, _user):
+        return run_readonly_sql(db, statement, limit)

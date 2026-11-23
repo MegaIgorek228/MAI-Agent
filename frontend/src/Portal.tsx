@@ -184,12 +184,13 @@ type WorkspaceProps = {
   error: string;
   onNavigate: (view: View) => void;
   onLogout: () => void;
+  chatOnly?: boolean;
   children: ReactNode;
 };
 
-export function Workspace({ user, profile, view, error, onNavigate, onLogout, children }: WorkspaceProps) {
+export function Workspace({ user, profile, view, error, onNavigate, onLogout, chatOnly, children }: WorkspaceProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const chat = view === "agent";
+  const chat = chatOnly || view === "agent";
   const shell = useRef<HTMLDivElement>(null);
   const menuToggle = useRef<HTMLButtonElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -246,40 +247,58 @@ export function Workspace({ user, profile, view, error, onNavigate, onLogout, ch
     <div className={chat ? "app-shell app-shell--agent" : "app-shell"} ref={shell}>
       <header className="app-header">
         <div className="app-masthead">
-          <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
-          <button ref={menuToggle} type="button" className="app-menu-toggle"
-            onClick={() => setMenuOpen((open) => !open)}
-            aria-label={menuOpen ? "Закрыть меню" : "Открыть меню"}
-            aria-expanded={menuOpen} aria-controls="app-sidebar">
-            <Icon name={menuOpen ? "x" : "menu"} />
-            <span>Меню</span>
-          </button>
-          <div id="app-sidebar" className={menuOpen ? "app-sidebar app-sidebar--open" : "app-sidebar"}>
-            <nav className="app-nav" aria-label="Разделы кабинета">
-              {nav.map((item) => (
-                <button className="nav-item" type="button" key={item} onClick={() => navigate(item)}
-                  aria-current={view === item ? "page" : undefined}>
-                  <span>{viewTitles[item]}</span>
-                </button>
-              ))}
-            </nav>
+          {chatOnly ? (
+            <span className="brand"><Brand /></span>
+          ) : (
+            <button type="button" className="brand-button" onClick={() => navigate("home")}><Brand /></button>
+          )}
+          {!chatOnly && (
+            <button ref={menuToggle} type="button" className="app-menu-toggle"
+              onClick={() => setMenuOpen((open) => !open)}
+              aria-label={menuOpen ? "Закрыть меню" : "Открыть меню"}
+              aria-expanded={menuOpen} aria-controls="app-sidebar">
+              <Icon name={menuOpen ? "x" : "menu"} />
+              <span>Меню</span>
+            </button>
+          )}
+          {chatOnly ? (
             <div className="masthead-account">
-              <button className="masthead-account__profile" type="button" onClick={() => navigate("profile")}
-                aria-label="Открыть учётную запись" title={account.name}>
-                <span className="avatar">{account.initials}</span>
-                <span className="masthead-account__text">
-                  <strong>{account.name}</strong>
-                  <small>{account.role}</small>
-                </span>
-              </button>
+              <span className="masthead-account__text">
+                <strong>{account.name}</strong>
+                <small>{account.role}</small>
+              </span>
               <button type="button" className="masthead-account__logout" onClick={onLogout} title="Выйти">
                 <Icon name="logout" /><span>Выйти</span>
               </button>
             </div>
-          </div>
+          ) : (
+            <div id="app-sidebar" className={menuOpen ? "app-sidebar app-sidebar--open" : "app-sidebar"}>
+              <nav className="app-nav" aria-label="Разделы кабинета">
+                {nav.map((item) => (
+                  <button className="nav-item" type="button" key={item} onClick={() => navigate(item)}
+                    aria-current={view === item ? "page" : undefined}>
+                    <span>{viewTitles[item]}</span>
+                  </button>
+                ))}
+              </nav>
+              <div className="masthead-account">
+                <button className="masthead-account__profile" type="button" onClick={() => navigate("profile")}
+                  aria-label="Открыть учётную запись" title={account.name}>
+                  <span className="avatar">{account.initials}</span>
+                  <span className="masthead-account__text">
+                    <strong>{account.name}</strong>
+                    <small>{account.role}</small>
+                  </span>
+                </button>
+                <button type="button" className="masthead-account__logout" onClick={onLogout} title="Выйти">
+                  <Icon name="logout" /><span>Выйти</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </header>
-      {menuOpen && <button type="button" tabIndex={-1} aria-hidden="true" className="mobile-backdrop" onClick={() => setMenuOpen(false)} />}
+      {!chatOnly && menuOpen && <button type="button" tabIndex={-1} aria-hidden="true" className="mobile-backdrop" onClick={() => setMenuOpen(false)} />}
       <div className="app-column">
         <main className="app-content">
           {error && <p className="error global-error" role="alert">{error}</p>}

@@ -48,9 +48,17 @@ auxiliary:
     provider: custom:mai
     reasoning_effort: low
 
-# ACP exposes the web and session search toolsets. Backend operations
-# are registered separately through the session's MCP connection.
+# ACP exposes the native Hermes toolsets (terminal, files, code, memory,
+# history, planning). The effective list for the ACP adapter is set by the
+# custom provider plugin (plugins/model-providers/custom) — it re-scopes the
+# "hermes-acp" preset, because the adapter hardcodes that preset and ignores
+# this key. Keep the two in sync.
+# Backend operations are registered separately through the session's MCP connection.
 platform_toolsets:
   acp:
-    - web
+    - terminal
+    - file
+    - code_execution
+    - memory
     - session_search
+    - todo

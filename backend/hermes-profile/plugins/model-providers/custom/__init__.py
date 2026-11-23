@@ -163,28 +163,36 @@ def _install_mai_httpx_fix() -> None:
 _install_mai_httpx_fix()
 
 
-# ── Third fix: ACP toolset override (2026-11-21) ─────────────────────────────
+# ── Third fix: ACP toolset override (2026-11-21, re-scoped 2026-11-23) ───────
 # The ACP adapter (acp_adapter/session.py::_make_agent) hardcodes
 # enabled_toolsets=["hermes-acp"] and ignores platform_toolsets.acp from
-# config.yaml. The stock "hermes-acp" preset is a coding-agent surface
-# (terminal, file tools, browser, skills, delegation, code execution) — for a
-# Q&A admissions agent that means long detours (the model explored the
-# container filesystem and even ran python against the backend source),
-# 10+ model turns per answer (~100-120 s), and a post-turn background
-# skill-review (gated on skill_manage being enabled) that burned extra
-# ~100 s model calls.
+# config.yaml. The stock "hermes-acp" preset is a coding-agent surface.
 #
-# Plugins may contribute tools to toolsets, so we re-define the preset here
-# (user level, no source changes): only what a Q&A agent needs.
-#   - session_search: long-chat context
-# The actual page fetching is done by the Backend MCP tool `fetch_web_page`
-# (see app/mcp_tools.py): it works with no paid API key, unlike hermes'
-# web_extract (whose extract backends firecrawl/tavily/exa/parallel all need
-# paid keys and are absent here) and web_search (ddgs is search-only and its
-# DuckDuckGo endpoint returns nothing from this network). Session MCP tools
-# (fetch_web_page, get_authenticated_user) are registered per ACP session and
-# are NOT gated by this toolset — they stay available.
-# Removing skill_manage also stops the post-turn background skill review.
+# 2026-11-21: trimmed to session_search only — the model made long filesystem
+# detours, the web tools had no paid API keys, and skill_manage triggered a
+# slow post-turn background skill review (~100 s model calls).
+#
+# 2026-11-23: the product concept changed — MAI-Agent is now a plain Hermes
+# Agent with its native toolset (user requirement). The preset is re-scoped to
+# the native surface the concept asks for, without the expensive extras:
+#   - terminal / process        — terminal commands
+#   - read_file / write_file /
+#     patch / search_files      — filesystem
+#   - execute_code              — local code execution
+#   - memory                    — MEMORY.md persistent memory
+#   - session_search            — conversation history
+#   - todo                      — task planning
+# Still excluded and why:
+#   - web_search / web_extract  — need paid search/extract API keys that are
+#     absent; page fetching stays on the Backend MCP tool `fetch_web_page`;
+#   - browser_*                 — no Node/Chromium in the container;
+#   - skills_* / skill_manage   — re-enables the post-turn background
+#     skill review (~100 s extra model calls per turn);
+#   - delegate_task             — subagent fan-out, not needed here;
+#   - vision_analyze            — images go natively to the model
+#     (agent.image_input_mode: native).
+# Session MCP tools (fetch_web_page, sql_query, ФИС ГИА, ...) are registered
+# per ACP session and are NOT gated by this toolset — they stay available.
 def _install_mai_acp_toolset_override() -> None:
     try:
         from toolsets import TOOLSETS
@@ -193,7 +201,12 @@ def _install_mai_acp_toolset_override() -> None:
     preset = TOOLSETS.get("hermes-acp")
     if not isinstance(preset, dict):
         return
-    preset["tools"] = ["session_search"]
+    preset["tools"] = [
+        "terminal", "process",
+        "read_file", "write_file", "patch", "search_files",
+        "execute_code",
+        "memory", "session_search", "todo",
+    ]
     preset["includes"] = []
 
 

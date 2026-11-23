@@ -4,53 +4,25 @@ import type { ChangeEvent, FormEvent } from "react";
 import {
   ApiError,
   createChatSession,
-  createTelegramPairingCode,
   getChatMessages,
   getCurrentUser,
-  getDocuments,
-  getProfile,
   listChatSessions,
   login,
   register,
   sendChatMessage,
-  updateProfile,
   uploadDocument,
 } from "./api";
-import type { ChatMessage, ChatSession, DocumentItem, Profile, User } from "./api";
-import { ApplicantApplications } from "./Admissions";
-import { Achievements } from "./Achievements";
+import type { ChatMessage, ChatSession, User } from "./api";
 import { AssistantWorkspace } from "./AssistantWorkspace";
-import { Cockpit } from "./Cockpit";
-import { Documents, requestErrorMessage } from "./Documents";
-import { AuthScreen, HomePage, ProfilePage, Workspace, isStaff } from "./Portal";
-import type { AuthMode, RegisterType, View } from "./Portal";
-import { StaffApplications } from "./StaffApplications";
+import { requestErrorMessage } from "./Documents";
+import { AuthScreen, Workspace } from "./Portal";
+import type { AuthMode, RegisterType } from "./Portal";
 import "./styles.css";
 
 type ChatAttachment = { documentId: number; name: string; previewUrl: string };
 
 const sessionKey = "mai-agent.session";
-const viewHashes: Record<View, string> = {
-  home: "#map",
-  profile: "#seat",
-  documents: "#cockpit",
-  applications: "#applications",
-  achievements: "#achievements",
-  staff: "#staff",
-  agent: "#cabin",
-};
-
-function readView(): View {
-  const route = (Object.keys(viewHashes) as View[]).find((view) => viewHashes[view] === window.location.hash);
-  return route ?? "home";
-}
-
-function canOpenView(user: User, view: View) {
-  if (view === "staff") return isStaff(user);
-  if (view === "applications" || view === "achievements") return user.role === "applicant";
-  if (view === "documents") return user.role !== "student";
-  return true;
-}
+const chatSessionKey = "mai-agent.chat-session";
 
 function readSessionToken(): string | null {
   try {
@@ -66,6 +38,24 @@ function storeSessionToken(token: string | null) {
     else window.sessionStorage.removeItem(sessionKey);
   } catch {
     // The active page can still use its in-memory session if storage is blocked.
+  }
+}
+
+function readChatSessionId(): number | null {
+  try {
+    const raw = window.sessionStorage.getItem(chatSessionKey);
+    return raw ? Number(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeChatSessionId(id: number | null) {
+  try {
+    if (id !== null) window.sessionStorage.setItem(chatSessionKey, String(id));
+    else window.sessionStorage.removeItem(chatSessionKey);
+  } catch {
+    // storage is optional
   }
 }
 
@@ -126,11 +116,11 @@ export function App() {
 
   const logout = () => {
     storeSessionToken(null);
+    storeChatSessionId(null);
     setToken(null);
     setUser(null);
     setError("");
     setRestoreError("");
-    window.history.replaceState(null, "", viewHashes.home);
   };
 
   if (token && user) return <SessionWorkspace key={token} token={token} user={user} onLogout={logout} />;
@@ -138,7 +128,7 @@ export function App() {
   if (token) {
     return (
       <main className="session-restore" aria-busy={!restoreError}>
-        <h1>{restoreError ? "Не удалось открыть кабинет" : "Открываем кабинет"}</h1>
+        <h1>{restoreError ? "Не удалось открыть MAI Agent" : "Открываем MAI Agent"}</h1>
         {restoreError ? (
           <>
             <p className="error" role="alert">{restoreError}</p>
@@ -167,11 +157,7 @@ export function App() {
 }
 
 function SessionWorkspace({ token, user, onLogout }: { token: string; user: User; onLogout: () => void }) {
-  const [requestedView, setRequestedView] = useState(readView);
-  const view = canOpenView(user, requestedView) ? requestedView : "home";
   const [error, setError] = useState("");
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [chatSessionId, setChatSessionId] = useState<number | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
   const [historyRefresh, setHistoryRefresh] = useState(0);
@@ -180,114 +166,50 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const [chatAttachment, setChatAttachment] = useState<ChatAttachment | null>(null);
-  const [telegramPairingCode, setTelegramPairingCode] = useState("");
-  const [telegramPairingLoading, setTelegramPairingLoading] = useState(false);
-  const [profilePending, setProfilePending] = useState(false);
-  const [profileSaved, setProfileSaved] = useState(false);
-
-  useEffect(() => {
-    const restoreView = () => {
-      setError("");
-      setRequestedView(readView());
-    };
-    window.addEventListener("popstate", restoreView);
-    window.addEventListener("hashchange", restoreView);
-    return () => {
-      window.removeEventListener("popstate", restoreView);
-      window.removeEventListener("hashchange", restoreView);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (requestedView !== view) {
-      window.history.replaceState(null, "", viewHashes[view]);
-      setRequestedView(view);
-    }
-  }, [requestedView, view]);
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: "instant" });
-  }, [view]);
-
-  useEffect(() => {
-    let ignore = false;
-    const reportError = (requestError: unknown) => {
-      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось загрузить данные кабинета"));
-    };
-    getProfile(token).then((currentProfile) => {
-      if (!ignore) setProfile(currentProfile);
-    }).catch(reportError);
-    if (user.role !== "student") {
-      getDocuments(token).then((currentDocuments) => {
-        if (!ignore) setDocuments((current) => {
-          const changedIds = new Set(current.map((document) => document.id));
-          return [...current, ...currentDocuments.filter((document) => !changedIds.has(document.id))];
-        });
-      }).catch(reportError);
-    }
-    return () => { ignore = true; };
-  }, [token, user.role]);
 
   useEffect(() => {
     if (!chatAttachment) return;
     return () => URL.revokeObjectURL(chatAttachment.previewUrl);
   }, [chatAttachment]);
 
+  // Load the dialog history and restore the last active dialog for this browser tab.
   useEffect(() => {
-    if (!token || view !== "agent") return;
     let ignore = false;
     setHistoryLoading(true);
-    listChatSessions(token).then((sessions) => {
-      if (!ignore) setChatSessions(sessions);
-    }).catch((requestError) => {
-      if (!ignore) setError(requestErrorMessage(requestError, "Не удалось открыть историю диалогов"));
-    }).finally(() => {
-      if (!ignore) setHistoryLoading(false);
-    });
+    (async () => {
+      try {
+        const sessions = await listChatSessions(token);
+        if (ignore) return;
+        setChatSessions(sessions);
+        const stored = readChatSessionId();
+        const preferred = sessions.find((session) => session.id === stored) ?? sessions[0];
+        const id = preferred?.id ?? null;
+        setChatSessionId(id);
+        if (id === null) {
+          setChatMessages([]);
+          return;
+        }
+        storeChatSessionId(id);
+        setChatMessages(await getChatMessages(token, id));
+      } catch (requestError) {
+        if (!ignore) setError(requestErrorMessage(requestError, "Не удалось открыть историю диалогов"));
+      } finally {
+        if (!ignore) setHistoryLoading(false);
+      }
+    })();
     return () => { ignore = true; };
-  }, [token, view, historyRefresh]);
+  }, [token, historyRefresh]);
 
-  const replaceDocument = (replacement: DocumentItem) => {
-    setDocuments((current) => current.some((item) => item.id === replacement.id)
-      ? current.map((item) => item.id === replacement.id ? replacement : item)
-      : [replacement, ...current]);
-  };
-
-  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    setError("");
-    setProfileSaved(false);
-    setProfilePending(true);
-    try {
-      const updated = await updateProfile(token, {
-        first_name: String(form.get("first_name") || ""),
-        last_name: String(form.get("last_name") || ""),
-        phone: String(form.get("phone") || ""),
-        target_program: String(form.get("target_program") || ""),
-        admission_basis: String(form.get("admission_basis") || ""),
-      });
-      setProfile(updated);
-      setProfileSaved(true);
-    } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось сохранить профиль"));
-    } finally {
-      setProfilePending(false);
-    }
-  };
-
-  const showView = (next: View) => {
-    if (!canOpenView(user, next)) return;
-    if (window.location.hash !== viewHashes[next]) {
-      window.history.pushState(null, "", viewHashes[next]);
-    }
-    setError("");
-    setRequestedView(next);
-  };
-
-  const clearComposer = () => {
-    setChatInput("");
-    setChatAttachment(null);
+  const createAndRememberChat = async () => {
+    const session = await createChatSession(token);
+    setChatSessionId(session.id);
+    storeChatSessionId(session.id);
+    setChatSessions((current) => [
+      { id: session.id, channel: session.channel, created_at: new Date().toISOString() },
+      ...current.filter(({ id }) => id !== session.id),
+    ]);
+    setHistoryRefresh((value) => value + 1);
+    return session.id;
   };
 
   const openChat = async (id: number) => {
@@ -297,24 +219,15 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
     try {
       const messages = await getChatMessages(token, id);
       setChatSessionId(id);
+      storeChatSessionId(id);
       setChatMessages(messages);
-      clearComposer();
+      setChatInput("");
+      setChatAttachment(null);
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось восстановить диалог"));
     } finally {
       setChatLoading(false);
     }
-  };
-
-  const createAndRememberChat = async () => {
-    const session = await createChatSession(token);
-    setChatSessionId(session.id);
-    setChatSessions((current) => [
-      { id: session.id, channel: session.channel, created_at: new Date().toISOString() },
-      ...current.filter(({ id }) => id !== session.id),
-    ]);
-    setHistoryRefresh((value) => value + 1);
-    return session.id;
   };
 
   const startChat = async () => {
@@ -324,24 +237,12 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
     try {
       await createAndRememberChat();
       setChatMessages([]);
-      clearComposer();
+      setChatInput("");
+      setChatAttachment(null);
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось начать диалог"));
     } finally {
       setChatLoading(false);
-    }
-  };
-
-  const createTelegramPairing = async () => {
-    setError("");
-    setTelegramPairingLoading(true);
-    try {
-      const pairing = await createTelegramPairingCode(token);
-      setTelegramPairingCode(pairing.code);
-    } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось создать код"));
-    } finally {
-      setTelegramPairingLoading(false);
     }
   };
 
@@ -364,7 +265,8 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
       }]);
       const response = await sendChatMessage(token, sessionId, content, chatAttachment?.documentId);
       setChatMessages((current) => [...current, response]);
-      clearComposer();
+      setChatInput("");
+      setChatAttachment(null);
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось отправить сообщение"));
       if (sessionId !== null) {
@@ -382,7 +284,6 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
     setChatLoading(true);
     try {
       const uploaded = await uploadDocument(token, file, "image");
-      replaceDocument(uploaded);
       setChatAttachment({ documentId: uploaded.id, name: file.name, previewUrl: URL.createObjectURL(file) });
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось загрузить изображение"));
@@ -393,26 +294,9 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
   };
 
   return (
-    <Workspace user={user} profile={profile} view={view} error={error} onNavigate={showView} onLogout={onLogout}>
-      {view === "home" && <HomePage pairingCode={telegramPairingCode} pairingPending={telegramPairingLoading}
-        onPair={createTelegramPairing} />}
-      {view === "profile" && <ProfilePage user={user} profile={profile} pending={profilePending} saved={profileSaved}
-        onSave={saveProfile} onChange={() => setProfileSaved(false)} />}
-      {view === "documents" && user.role !== "student" && (
-        <>
-          <Cockpit token={token} user={user} documents={documents}
-            onOpenApplications={() => showView("applications")} onOpenStaff={() => showView("staff")} />
-          <Documents token={token} documents={documents} replaceDocument={replaceDocument} />
-        </>
-      )}
-      {view === "applications" && user.role === "applicant" && (
-        <ApplicantApplications key={token} token={token} documents={documents} profile={profile} />
-      )}
-      {view === "achievements" && user.role === "applicant" && (
-        <Achievements key={token} token={token} />
-      )}
-      {view === "staff" && isStaff(user) && <StaffApplications key={token} token={token} />}
-      {view === "agent" && <AssistantWorkspace token={token} sessionId={chatSessionId}
+    <Workspace chatOnly user={user} profile={null} view="agent" error={error}
+      onNavigate={() => {}} onLogout={onLogout}>
+      <AssistantWorkspace token={token} sessionId={chatSessionId}
         sessions={chatSessions} messages={chatMessages} input={chatInput} pending={chatLoading}
         historyLoading={historyLoading} attachment={chatAttachment}
         onInputChange={setChatInput} onOpenSession={openChat} onStartSession={startChat}
@@ -420,7 +304,7 @@ function SessionWorkspace({ token, user, onLogout }: { token: string; user: User
           setError("");
           setHistoryRefresh((value) => value + 1);
         }}
-        onSend={sendMessage} onAttach={attachChatImage} onRemoveAttachment={() => setChatAttachment(null)} />}
+        onSend={sendMessage} onAttach={attachChatImage} onRemoveAttachment={() => setChatAttachment(null)} />
     </Workspace>
   );
 }
