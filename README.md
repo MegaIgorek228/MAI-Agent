@@ -22,7 +22,8 @@
   их. Сессии восстанавливаются после перезапуска Backend.
 - **MCP-сервер** (встроен в Backend, FastMCP) — источники данных для агента:
   1. имитация ФИС ГИА (синтетический реестр участников ЕГЭ);
-  2. SQL — read-only `sql_query`;
+  2. SQL — `sql_query` (произвольные SQL-команды к базе: SELECT, INSERT,
+     UPDATE, DELETE, DDL; 500 строк — лимит вывода SELECT);
   3. `fetch_web_page` — веб-страницы.
 
 Хранилище Backend — PostgreSQL (`agent_sessions` + источники данных).

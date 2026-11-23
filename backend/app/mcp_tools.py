@@ -3,15 +3,16 @@
 Three data capabilities, no user context:
 - ``fetch_web_page`` — live MAI admission pages over HTTPS (SSRF-guarded);
 - ``search_synthetic_ege_results`` — the synthetic ФИС ГИА registry;
-- ``sql_query`` — read-only SQL access to the MAI data store
-  (knowledge_* official materials, synthetic_ege_* registry, campaign data).
+- ``sql_query`` — SQL access to the MAI data store (knowledge_* official
+  materials, synthetic_ege_* registry, campaign data). The demo version
+  intentionally leaves SQL open: any single PostgreSQL statement
+  (SELECT, INSERT, UPDATE, DELETE, DDL) is allowed.
 
 None of the tools is bound to a user profile: there are no user accounts in
 the system, and the trusted-context header is not sent to the MCP server.
 """
 
 import ipaddress
-import re
 import socket
 from datetime import date
 from urllib.parse import urlsplit
@@ -226,62 +227,83 @@ def fetch_web_page(url: str, section_query: str | None = None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SQL tool: read-only access to the MAI data store (second external data source)
+# SQL tool: direct SQL access to the MAI data store (second external data source)
 # ─────────────────────────────────────────────────────────────────────────────
+#
+# Demo-version policy: access is intentionally OPEN. Any single PostgreSQL
+# statement is allowed — SELECT, INSERT, UPDATE, DELETE, DDL, etc. There is
+# no RBAC, no statement-type filtering and no table-level restrictions.
+# The 500-row cap below limits SELECT RESULT DISPLAY ONLY, never execution.
 
-_SQL_READONLY_RE = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
-_SQL_TABLE_REF_RE = re.compile(r"\b(?:from|join)\s+[`\"']?(\w+)", re.IGNORECASE)
-_SQL_MAX_ROWS = 500
+_SQL_MAX_RESULT_ROWS = 500
 
 
-def _validate_readonly_sql(sql: str) -> str:
-    """Validate and normalise a SQL statement: single read-only SELECT/WITH."""
+def _validate_sql(sql: str) -> str:
+    """Validate and normalise a SQL statement: a single non-empty statement.
+
+    Statement types are NOT restricted (open access by design); only
+    multi-statement strings and empty input are rejected.
+    """
     statement = (sql or "").strip().rstrip(";").strip()
     if not statement:
         raise ValueError("Empty SQL statement")
     if ";" in statement:
         raise ValueError("Only a single SQL statement is allowed")
-    if not _SQL_READONLY_RE.match(statement):
-        raise ValueError("Only SELECT or WITH ... SELECT statements are allowed")
     return statement
 
 
-def run_readonly_sql(db, statement: str, limit: int = 100) -> dict[str, object]:
-    """Execute a validated read-only SELECT and return JSON-friendly rows."""
+def run_sql(db, statement: str, limit: int = 100) -> dict[str, object]:
+    """Execute a SQL statement and return a JSON-friendly result.
+
+    Statements returning rows (SELECT, ... RETURNING) come back as
+    columns + rows (display capped at 500 rows). Statements without a
+    result set (INSERT/UPDATE/DELETE/DDL) report the affected row count.
+    The transaction is committed — writes are intentional and persisted.
+    """
+    rows_limit = max(1, min(int(limit or 100), _SQL_MAX_RESULT_ROWS))
     result = db.execute(text(statement))
-    try:
+    if result.returns_rows:
         columns = list(result.keys())
-    except Exception:
-        columns = []
-    rows_limit = max(1, min(int(limit or 100), _SQL_MAX_ROWS))
-    rows = [dict(row._mapping) for row in result.fetchmany(rows_limit)]
-    db.rollback()  # read-only posture: never commit an agent-initiated transaction
-    return {
-        "columns": columns,
-        "rows": jsonable_encoder(rows),
-        "row_count": len(rows),
-        "limit": rows_limit,
-    }
+        rows = [dict(row._mapping) for row in result.fetchmany(rows_limit)]
+        db.commit()
+        return {
+            "columns": columns,
+            "rows": jsonable_encoder(rows),
+            "row_count": len(rows),
+            "limit": rows_limit,
+        }
+    affected = result.rowcount
+    db.commit()
+    return {"executed": True, "affected_rows": affected if affected and affected >= 0 else 0}
 
 
 @mcp.tool
 def sql_query(sql: str, limit: int = 100) -> dict[str, object]:
-    """Run a read-only SQL SELECT query against the MAI data store.
+    """Run a SQL statement against the MAI data store.
+
+    Open access (demo version): any single statement is allowed —
+    SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP and other
+    supported PostgreSQL commands. No query-type or table restrictions.
 
     Available data:
     - knowledge_sources / knowledge_chunks — official admission materials
       (title, url, content);
     - synthetic_ege_candidates / synthetic_ege_results — the synthetic
-      ФИС ГИА registry (people, subjects, scores).
+      ФИС ГИА registry (people, subjects, scores);
+    - agent_sessions / telegram_checkpoints — session mappings.
 
-    Only a single SELECT or WITH ... SELECT statement is allowed (no INSERT,
-    UPDATE, DELETE, DDL, no multiple statements). Results are returned as
-    JSON with column names and rows (capped at 500 rows).
+    Result shapes:
+    - row-returning statements: JSON with columns, rows, row_count, limit
+      (rows are capped at 500 for display only — execution is unaffected);
+    - other statements (INSERT/UPDATE/DELETE/DDL): {"executed": true,
+      "affected_rows": N}.
+
+    Only a single statement per call (no ';'-separated chains).
 
     Args:
-        sql: the SELECT statement to execute.
-        limit: maximum number of rows to return (default 100, max 500).
+        sql: the SQL statement to execute.
+        limit: maximum number of rows to display for SELECT (default 100, max 500).
     """
-    statement = _validate_readonly_sql(sql)
+    statement = _validate_sql(sql)
     with SessionLocal() as db:
-        return run_readonly_sql(db, statement, limit)
+        return run_sql(db, statement, limit)

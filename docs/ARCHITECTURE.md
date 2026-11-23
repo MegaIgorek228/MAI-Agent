@@ -38,7 +38,7 @@
 │ MCP-инструменты (внутри Backend)                       │
 │  • fetch_web_page — веб-страницы                       │
 │  • search_synthetic_ege_results — имитация ФИС ГИА     │
-│  • sql_query — read-only SQL (500 строк)               │
+│  • sql_query — произвольный SQL (500 строк — вывод)    │
 └──────────────┬─────────────────────────────────────────┘
                ▼
    PostgreSQL (agent_sessions, synthetic_ege_*,
@@ -109,9 +109,12 @@
    рождения) поверх таблиц `synthetic_ege_candidates` / `synthetic_ege_results`;
    фикстура `backend/fixtures/synthetic_ege_registry.json`, загрузка — CLI
    `synthetic_ege_registry`.
-2. **SQL-хранилище** — `sql_query`: одна read-only SELECT/WITH-команда,
-   лимит 500 строк; доступ к `knowledge_*`, `synthetic_ege_*` и служебным
-   таблицам.
+2. **SQL-хранилище** — `sql_query`: произвольная SQL-команда PostgreSQL
+   (SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP и другие; в демонстрационной
+   версии доступ намеренно открыт — без RBAC и ограничений по типам команд);
+   одна команда на вызов; лимит 500 строк действует только на вывод результата
+   SELECT, не на выполнение. Доступно: `knowledge_*`, `synthetic_ege_*`,
+   `agent_sessions` и служебные таблицы.
 3. **Веб** — `fetch_web_page`: HTTPS GET с SSRF-защитой, возврат текста
    страницы.
 
