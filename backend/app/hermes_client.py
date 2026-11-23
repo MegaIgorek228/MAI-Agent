@@ -273,6 +273,19 @@ class HermesClientManager:
         async with self._session(session_id):
             return (await self._open(session_id, None)).session_id
 
+    async def reset_session(self, session_id: str) -> str:
+        """Create a brand-new Hermes session for the app session.
+
+        Used by the Telegram ``/new`` command: the previous live process is
+        terminated and a fresh ``new_session`` is opened, so the chat
+        continues with a clean context. The old Hermes session itself is not
+        deleted — it stays in Hermes' own store (``state.db``); only the
+        live binding changes.
+        """
+        async with self._session(session_id):
+            await self._close_unlocked(session_id)
+            return (await self._open(session_id, None)).session_id
+
     async def prompt(
         self,
         session_id: str,

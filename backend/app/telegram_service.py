@@ -273,7 +273,10 @@ class TelegramService:
                 db.commit()
                 db.refresh(session)
             try:
-                session.hermes_session_id = await hermes_manager.start_session(str(session.id))
+                # reset_session opens a FRESH Hermes session and terminates
+                # the previous live process; start_session would keep the
+                # running process (and its context) when one already exists.
+                session.hermes_session_id = await hermes_manager.reset_session(str(session.id))
             except HermesUnavailableError as exc:
                 db.commit()
                 await self._send(token, chat_id, f"Агент временно недоступен: {exc}")

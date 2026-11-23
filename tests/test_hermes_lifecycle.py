@@ -179,6 +179,118 @@ def test_prompt_appends_turn_to_history(monkeypatch):
     asyncio.run(scenario())
 
 
+class UniqueConnection(Connection):
+    """Connection whose new_session returns a unique id per instance."""
+
+    _counter = 0
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        UniqueConnection._counter += 1
+        self.session_number = UniqueConnection._counter
+
+    async def new_session(self, **kwargs):
+        return SimpleNamespace(session_id=f"hermes-live-{self.session_number}")
+
+
+def _reset_fakes(monkeypatch, processes, connections):
+    async def spawn(*args, **kwargs):
+        process = Process()
+        processes.append(process)
+        return process
+
+    def connect(callbacks, *args, **kwargs):
+        connection = UniqueConnection()
+        connection.bind_callbacks(callbacks)
+        connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(hermes_client.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(hermes_client, "connect_to_agent", connect)
+    return hermes_client.HermesClientManager()
+
+
+def test_start_session_keeps_live_process(monkeypatch):
+    """Documented semantics that /new must NOT rely on: while a process is
+    alive, start_session returns the SAME Hermes session."""
+    UniqueConnection._counter = 0
+    processes, connections = [], []
+    manager = _reset_fakes(monkeypatch, processes, connections)
+
+    async def scenario():
+        first = await manager.start_session("app")
+        again = await manager.start_session("app")
+        assert first == again == "hermes-live-1"
+        assert len(connections) == 1
+        await manager.close_all()
+
+    asyncio.run(scenario())
+
+
+def test_reset_session_replaces_live_session(monkeypatch):
+    UniqueConnection._counter = 0
+    processes, connections = [], []
+    manager = _reset_fakes(monkeypatch, processes, connections)
+
+    async def scenario():
+        first = await manager.start_session("app")
+        await manager.prompt("app", first, "old question")
+
+        second = await manager.reset_session("app")
+        assert second != first
+        # The previous live process is terminated, not leaked.
+        assert connections[0].closed
+        assert processes[0].returncode == 0
+
+        # The next prompt goes to the NEW Hermes session.
+        answer, used = await manager.prompt("app", second, "new question")
+        assert used == second
+        assert connections[0].prompts == ["old question"]
+        assert connections[1].prompts == ["new question"]
+        await manager.close_all()
+
+    asyncio.run(scenario())
+
+
+def test_reset_session_twice_and_no_process_leak(monkeypatch):
+    UniqueConnection._counter = 0
+    processes, connections = [], []
+    manager = _reset_fakes(monkeypatch, processes, connections)
+
+    async def scenario():
+        first = await manager.start_session("app")
+        second = await manager.reset_session("app")
+        third = await manager.reset_session("app")
+        assert len({first, second, third}) == 3
+        # Exactly one live process for the app session.
+        live = [p for p in processes if p.returncode is None]
+        assert len(live) == 1
+        assert connections[0].closed and connections[1].closed
+        assert not connections[2].closed
+        # The latest session serves prompts.
+        _, used = await manager.prompt("app", third, "after two resets")
+        assert used == third
+        assert connections[2].prompts == ["after two resets"]
+        await manager.close_all()
+
+    asyncio.run(scenario())
+
+
+def test_reset_session_without_live_process_starts_fresh(monkeypatch):
+    UniqueConnection._counter = 0
+    processes, connections = [], []
+    manager = _reset_fakes(monkeypatch, processes, connections)
+
+    async def scenario():
+        # No prior process: reset simply creates the first session.
+        first = await manager.reset_session("app")
+        assert first == "hermes-live-1"
+        assert len(connections) == 1
+        await manager.close_all()
+
+    asyncio.run(scenario())
+
+
 def test_process_quota_and_idle_reaping(monkeypatch):
     monkeypatch.setenv("HERMES_MAX_PROCESSES", "1")
     monkeypatch.setenv("HERMES_IDLE_TIMEOUT_SECONDS", "1")
