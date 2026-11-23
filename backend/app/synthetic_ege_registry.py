@@ -2,7 +2,7 @@
 
 The registry is reference data: the only supported way to change it is this
 administrative loader (a fixture file that must already be present on the
-server). Applicant-facing routes and MCP tools only read it.
+server). The MCP search tool only reads it.
 
 Fixture format (JSON):
 - {"candidates": [ {...}, ... ], "results": [ {...}, ... ]} — people plus
@@ -17,14 +17,42 @@ same fixture changes nothing. Updating existing values requires the explicit
 
 import argparse
 import json
+from datetime import date
 from pathlib import Path
+from typing import Annotated, Literal
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
-from app.admissions_schemas import SyntheticCandidateInput, SyntheticEgeInput
 from app.db import SessionLocal
 from app.models import SyntheticEgeCandidate, SyntheticEgeResult
+
+SyntheticCandidateId = Annotated[str, Field(pattern=r"^SYN-[A-Za-z0-9-]{1,40}$")]
+
+
+class SyntheticEgeInput(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    candidate_id: SyntheticCandidateId
+    subject: Annotated[str, Field(min_length=1, max_length=100)]
+    year: Annotated[int, Field(ge=2000, le=2100)]
+    score: Annotated[int, Field(ge=0, le=100)]
+    status: Literal["valid", "annulled"] = "valid"
+
+
+class SyntheticCandidateInput(BaseModel):
+    """One synthetic person in the fixture registry."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    candidate_id: SyntheticCandidateId
+    full_name: Annotated[str, Field(min_length=3, max_length=255)]
+    date_of_birth: date
+
+    @model_validator(mode="after")
+    def compact_full_name(self):
+        self.full_name = " ".join(self.full_name.split())
+        return self
 
 
 def _parse(raw: bytes) -> tuple[list[SyntheticCandidateInput], list[SyntheticEgeInput]]:

@@ -1,36 +1,43 @@
+"""Telegram channel: a thin relay from bot chats to Hermes sessions.
+
+No user accounts exist: a Telegram chat id is only a mapping key to the
+chat's agent session (``agent_sessions.external_id``). Text and photos go
+to Hermes; the answer is sent back to the chat. Polling lives only here —
+the Hermes gateway's Telegram polling is not used.
+"""
+
 import asyncio
 import logging
-import secrets
-import ssl
 import base64
+import ssl
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import SessionLocal
-from app.document_service import SUPPORTED_IMAGE_TYPES, create_document
 from app.hermes_client import (
     HermesUnavailableError,
     hermes_manager,
     with_image_instruction,
 )
-from app.models import ChatMessage, ChatSession, TelegramIdentity, User
-from app.security import hash_password
+from app.models import AgentSession
 from app.telegram_checkpoint import read_checkpoint, save_checkpoint
 
 logger = logging.getLogger(__name__)
 
-DOCUMENT_MIME_TYPES = {
-    ".pdf": "application/pdf",
-    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".txt": "text/plain",
-} | {suffix: mime for mime, suffix in SUPPORTED_IMAGE_TYPES.items()}
-DOCUMENT_MIME_TYPES[".jpeg"] = "image/jpeg"
+IMAGE_MIME_BY_SUFFIX = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
 
 
 def _telegram_ssl_context() -> ssl.SSLContext:
@@ -147,6 +154,53 @@ class TelegramService:
                     logger.warning("Telegram polling failed: %s", exc)
                     await asyncio.sleep(3)
 
+    # ── session mapping ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _find_session(db: Session, chat_id: str) -> AgentSession | None:
+        return db.scalar(
+            select(AgentSession).where(
+                AgentSession.source == "telegram",
+                AgentSession.external_id == chat_id,
+            )
+        )
+
+    async def _ensure_session(self, chat_id: str) -> tuple[str, str] | None:
+        """Return (app_session_id, hermes_session_id) for the chat, creating
+        them if needed. Returns None when Hermes is unavailable."""
+        db = SessionLocal()
+        try:
+            session = self._find_session(db, chat_id)
+            if session is None:
+                session = AgentSession(source="telegram", external_id=chat_id)
+                db.add(session)
+                db.commit()
+                db.refresh(session)
+            if not session.hermes_session_id:
+                try:
+                    session.hermes_session_id = await hermes_manager.start_session(str(session.id))
+                except HermesUnavailableError as exc:
+                    db.delete(session)
+                    db.commit()
+                    logger.warning("Telegram: unable to start Hermes session for chat %s: %s", chat_id, exc)
+                    return None
+                db.commit()
+            return str(session.id), session.hermes_session_id
+        finally:
+            db.close()
+
+    @staticmethod
+    def _rebind_session(app_session_id: str, hermes_session_id: str) -> None:
+        with SessionLocal() as db:
+            db.execute(
+                update(AgentSession)
+                .where(AgentSession.id == UUID(app_session_id))
+                .values(hermes_session_id=hermes_session_id)
+            )
+            db.commit()
+
+    # ── update handling ────────────────────────────────────────────────────
+
     async def _handle_update(self, token: str, update: dict[str, Any]) -> None:
         message = update.get("message") or {}
         chat = message.get("chat") or {}
@@ -162,7 +216,9 @@ class TelegramService:
             await self._handle_photo(token, chat_id, photos, caption)
             return
         if message.get("document") and chat_id:
-            await self._handle_document(token, chat_id, message["document"])
+            await self._send(
+                token, chat_id, "Пока поддерживаются только текст и изображения."
+            )
             return
         if not chat_id or not text:
             logger.info(
@@ -176,104 +232,54 @@ class TelegramService:
         )
 
         if text.startswith("/start"):
-            await self._start_user(token, chat_id)
+            await self._start_chat(token, chat_id)
             return
         if text.startswith("/help"):
             await self._send(
                 token,
                 chat_id,
-                "Команды:\n/start — создать Telegram-аккаунт и начать работу\n"
-                "/pair КОД — привязать существующий аккаунт Backend\n"
-                "Фото прикрепляются к чату. PDF, DOCX и TXT сохраняются в разделе документов.",
+                "Команды:\n/start — начать работу\n/new — начать новый чат (с чистым контекстом)\n/help — эта справка\n\n"
+                "Напишите вопрос текстом или отправьте фото — его проанализирует агент.",
             )
             return
-        if text.startswith("/pair"):
-            await self._pair(token, chat_id, text)
+        if text.startswith("/new"):
+            await self._new_chat(token, chat_id)
             return
         await self._answer_user_message(token, chat_id, text)
 
-    async def _start_user(self, token: str, chat_id: str) -> None:
+    async def _start_chat(self, token: str, chat_id: str) -> None:
         db = SessionLocal()
         try:
-            identity = db.scalar(
-                select(TelegramIdentity).where(TelegramIdentity.chat_id == chat_id)
-            )
-            if identity is not None and identity.user_id is not None:
-                await self._send(
-                    token,
-                    chat_id,
-                    "MAI-Agent готов к работе. Напишите вопрос.",
-                )
-                return
-
-            identity = db.scalar(
-                select(TelegramIdentity).where(TelegramIdentity.chat_id == chat_id)
-            )
-            if identity is None:
-                identity = TelegramIdentity(chat_id=chat_id)
-                db.add(identity)
-
-            email = f"telegram-{chat_id}@mai-agent.local"
-            user = db.scalar(select(User).where(User.email == email))
-            if user is None:
-                user = User(
-                    email=email,
-                    password_hash=hash_password(secrets.token_urlsafe(32)),
-                    role="applicant",
-                )
-                db.add(user)
-                db.flush()
-            identity.user_id = user.id
-            identity.pairing_code = None
-            identity.pairing_expires_at = None
-            db.commit()
+            existed = self._find_session(db, chat_id) is not None
         finally:
             db.close()
-
-        await self._send(
-            token,
-            chat_id,
-            "Аккаунт Telegram создан автоматически. Напишите вопрос.",
-        )
-
-    async def _pair(self, token: str, chat_id: str, text: str) -> None:
-        parts = text.split(maxsplit=1)
-        if len(parts) != 2:
-            await self._send(token, chat_id, "Формат: /pair КОД")
+        if await self._ensure_session(chat_id) is None:
+            await self._send(token, chat_id, "Агент временно недоступен: попробуйте позже.")
             return
-        code = parts[1].strip().upper()
-        db = SessionLocal()
-        try:
-            identity = db.scalar(
-                select(TelegramIdentity).where(TelegramIdentity.pairing_code == code)
+        if not existed:
+            await self._send(
+                token, chat_id,
+                "Чат создан. Напишите вопрос — ответит агент МАИ.",
             )
-            if identity is None:
-                await self._send(token, chat_id, "Код не найден.")
-                return
-            expires_at = identity.pairing_expires_at
-            if expires_at is not None:
-                if expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=UTC)
-            if expires_at is None or expires_at <= datetime.now(UTC):
-                identity.pairing_code = None
-                identity.pairing_expires_at = None
-                db.commit()
-                await self._send(token, chat_id, "Код истек.")
-                return
+        else:
+            await self._send(token, chat_id, "MAI-Agent готов к работе. Напишите вопрос.")
 
-            existing = db.scalar(
-                select(TelegramIdentity).where(TelegramIdentity.chat_id == chat_id)
-            )
-            if existing is not None and existing.id != identity.id:
-                existing.chat_id = None
-                existing.user_id = None
-            identity.chat_id = chat_id
-            identity.pairing_code = None
-            identity.pairing_expires_at = None
+    async def _new_chat(self, token: str, chat_id: str) -> None:
+        with SessionLocal() as db:
+            session = self._find_session(db, chat_id)
+            if session is None:
+                session = AgentSession(source="telegram", external_id=chat_id)
+                db.add(session)
+                db.commit()
+                db.refresh(session)
+            try:
+                session.hermes_session_id = await hermes_manager.start_session(str(session.id))
+            except HermesUnavailableError as exc:
+                db.commit()
+                await self._send(token, chat_id, f"Агент временно недоступен: {exc}")
+                return
             db.commit()
-        finally:
-            db.close()
-        await self._send(token, chat_id, "Аккаунт успешно привязан.")
+        await self._send(token, chat_id, "Новый чат начат. Напишите вопрос.")
 
     async def _download_file(self, token: str, file_id: str) -> tuple[str, bytes] | None:
         if not file_id:
@@ -286,49 +292,6 @@ class TelegramService:
             response = await client.get(f"https://api.telegram.org/file/bot{token}/{path}")
             response.raise_for_status()
             return path, response.content
-
-    @staticmethod
-    def _linked_user(db: Session, chat_id: str) -> User | None:
-        return db.scalar(
-            select(User).join(TelegramIdentity, TelegramIdentity.user_id == User.id)
-            .where(TelegramIdentity.chat_id == chat_id)
-        )
-
-    def _store_document(self, chat_id: str, filename: str, mime: str, content: bytes) -> int | None:
-        with SessionLocal() as db:
-            user = self._linked_user(db, chat_id)
-            if user is None or not user.is_active:
-                return None
-            document = create_document(
-                db, owner_id=user.id, filename=filename, content_type=mime, content=content,
-            )
-            document_id = document.id
-            db.commit()
-            return document_id
-
-    async def _handle_document(self, token: str, chat_id: str, metadata: dict[str, Any]) -> None:
-        filename = Path(str(metadata.get("file_name", ""))).name[:255]
-        mime = DOCUMENT_MIME_TYPES.get(Path(filename).suffix.lower())
-        if mime is None:
-            await self._send(token, chat_id, "Поддерживаются PDF, DOCX, TXT и изображения.")
-            return
-        if int(metadata.get("file_size") or 0) > get_settings().max_upload_size_bytes:
-            await self._send(token, chat_id, "Файл превышает допустимый размер.")
-            return
-        downloaded = await self._download_file(token, str(metadata.get("file_id", "")))
-        if downloaded is None:
-            await self._send(token, chat_id, "Не удалось получить файл.")
-            return
-        _, content = downloaded
-        try:
-            document_id = await asyncio.to_thread(self._store_document, chat_id, filename, mime, content)
-        except ValueError as exc:
-            await self._send(token, chat_id, f"Не удалось сохранить файл. {exc}")
-            return
-        if document_id is None:
-            await self._send(token, chat_id, "Начните работу через /start или привяжите аккаунт через /pair.")
-            return
-        await self._send(token, chat_id, f"Документ «{filename}» сохранён в вашем профиле. Номер {document_id}.")
 
     async def _handle_photo(
         self, token: str, chat_id: str, photos: list[dict[str, Any]], caption: str
@@ -345,14 +308,9 @@ class TelegramService:
             return
         file_path, content = downloaded
         filename = Path(file_path).name[:255]
-        mime = DOCUMENT_MIME_TYPES.get(Path(filename).suffix.lower(), "image/jpeg")
-        try:
-            document_id = await asyncio.to_thread(self._store_document, chat_id, filename, mime, content)
-        except ValueError:
-            await self._send(token, chat_id, "Файл не является поддерживаемым изображением или слишком большой.")
-            return
-        if document_id is None:
-            await self._send(token, chat_id, "Начните работу через /start или привяжите аккаунт через /pair.")
+        mime = IMAGE_MIME_BY_SUFFIX.get(Path(filename).suffix.lower(), "image/jpeg")
+        if mime not in {"image/jpeg", "image/png", "image/webp", "image/gif"}:
+            await self._send(token, chat_id, "Не поддерживаемый тип изображения.")
             return
         content_blocks = {
             "data": base64.b64encode(content).decode("ascii"),
@@ -361,7 +319,6 @@ class TelegramService:
         await self._answer_user_message(
             token, chat_id, caption or "Проанализируй прикрепленное изображение.",
             content_blocks=content_blocks,
-            image_document_id=document_id,
         )
 
     async def _answer_user_message(
@@ -370,100 +327,47 @@ class TelegramService:
         chat_id: str,
         text: str,
         content_blocks: dict[str, str] | None = None,
-        image_document_id: int | None = None,
     ) -> None:
         t0 = datetime.now(UTC)
         logger.info(
             "Telegram answer start: chat=%s with_image=%s text=%r",
             chat_id, content_blocks is not None, text[:120],
         )
-        db = SessionLocal()
+        session_ids = await self._ensure_session(chat_id)
+        if session_ids is None:
+            await self._send(token, chat_id, "Агент временно недоступен: попробуйте позже.")
+            return
+        app_session_id, hermes_session_id = session_ids
+        prompt_text = with_image_instruction(text) if content_blocks is not None else text
+        logger.info("Telegram hermes prompt start: session=%s", app_session_id)
+        t1 = datetime.now(UTC)
         try:
-            identity = db.scalar(
-                select(TelegramIdentity).where(TelegramIdentity.chat_id == chat_id)
+            response, used_hermes_session_id = await hermes_manager.prompt(
+                app_session_id,
+                hermes_session_id,
+                prompt_text,
+                content_blocks=content_blocks,
             )
-            if identity is None or identity.user_id is None:
-                await self._send(
-                    token,
-                    chat_id,
-                    "Сначала привяжите аккаунт командой /pair КОД.",
-                )
-                return
-            user = db.get(User, identity.user_id)
-            if user is None or not user.is_active:
-                await self._send(token, chat_id, "Аккаунт недоступен.")
-                return
-
-            session = db.scalar(
-                select(ChatSession)
-                .where(
-                    ChatSession.user_id == user.id,
-                    ChatSession.channel == "telegram",
-                )
-                .order_by(ChatSession.created_at.desc())
+        except HermesUnavailableError as exc:
+            logger.warning(
+                "Telegram hermes prompt failed after %s: %s",
+                (datetime.now(UTC) - t1).total_seconds(), exc,
             )
-            if session is None:
-                session = ChatSession(user_id=user.id, channel="telegram")
-                db.add(session)
-                db.commit()
-                db.refresh(session)
-                try:
-                    session.hermes_session_id = await hermes_manager.start_session(user.id, session.id)
-                except HermesUnavailableError as exc:
-                    db.delete(session)
-                    db.commit()
-                    await self._send(
-                        token,
-                        chat_id,
-                        f"Агент временно недоступен: {exc}",
-                    )
-                    return
-                db.commit()
-
-            db.add(ChatMessage(
-                session_id=session.id, role="user", content=text, image_document_id=image_document_id,
-            ))
-            db.commit()
-            if not session.hermes_session_id:
-                await self._send(token, chat_id, "Агентская сессия не инициализирована.")
-                return
-            prompt_text = (
-                with_image_instruction(text) if content_blocks is not None else text
-            )
-            logger.info("Telegram hermes prompt start: session=%s", session.id)
-            t1 = datetime.now(UTC)
-            try:
-                response, used_hermes_session_id = await hermes_manager.prompt(
-                    user.id,
-                    session.id,
-                    session.hermes_session_id,
-                    prompt_text,
-                    content_blocks=content_blocks,
-                )
-            except HermesUnavailableError as exc:
-                logger.warning(
-                    "Telegram hermes prompt failed after %s: %s",
-                    (datetime.now(UTC) - t1).total_seconds(), exc,
-                )
-                await self._send(token, chat_id, f"Агент временно недоступен: {exc}")
-                return
+            await self._send(token, chat_id, f"Агент временно недоступен: {exc}")
+            return
+        logger.info(
+            "Telegram hermes prompt done in %.1fs, response_len=%d",
+            (datetime.now(UTC) - t1).total_seconds(), len(response or ""),
+        )
+        if used_hermes_session_id and used_hermes_session_id != hermes_session_id:
+            self._rebind_session(app_session_id, used_hermes_session_id)
             logger.info(
-                "Telegram hermes prompt done in %.1fs, response_len=%d",
-                (datetime.now(UTC) - t1).total_seconds(), len(response or ""),
+                "Telegram session %s re-bound to hermes session %s",
+                app_session_id, used_hermes_session_id,
             )
-            if used_hermes_session_id and used_hermes_session_id != session.hermes_session_id:
-                # Stale session after a restart: the manager fell back to a
-                # fresh hermes session — persist it for the next message.
-                session.hermes_session_id = used_hermes_session_id
-                db.commit()
-                logger.info("Telegram session %s re-bound to hermes session %s", session.id, used_hermes_session_id)
-            if not response:
-                await self._send(token, chat_id, "Hermes вернул пустой ответ.")
-                return
-            db.add(ChatMessage(session_id=session.id, role="assistant", content=response))
-            db.commit()
-        finally:
-            db.close()
+        if not response:
+            await self._send(token, chat_id, "Hermes вернул пустой ответ.")
+            return
         await self._send(token, chat_id, response)
         logger.info(
             "Telegram answer complete in %.1fs: chat=%s",

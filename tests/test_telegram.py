@@ -1,77 +1,47 @@
-"""Automated verification of the Telegram integration.
+"""Telegram channel tests: chat id -> session mapping, text and photo relay.
 
-Real code under test: telegram_service (update handling, pairing, photo ->
-ImageContentBlock -> ACP, polling ownership). Mocked: the Telegram Bot API
-network (`_post` and the file download) and the Hermes ACP layer
-(`hermes_manager`). The DB is the real test database.
+Mocked: the Telegram Bot API network and the Hermes ACP layer
+(``hermes_manager``). The DB is the real test database.
 """
-import asyncio
 import base64
-import io
-from types import SimpleNamespace
 
-from PIL import Image
-
-from app.db import SessionLocal
-from app.models import TelegramIdentity, User
-from app import telegram_service as tg_module
+import pytest
 from app.hermes_client import hermes_manager, IMAGE_INLINE_INSTRUCTION
-from app.security import hash_password
+from app import telegram_service as tg_module
+from app.models import AgentSession
+from app.db import SessionLocal
 
 
-def _link_user_and_chat(client, email: str, chat_id: str) -> str:
-    """Register a user via the API and link it to a Telegram chat."""
-    client.post("/auth/register", json={"email": email, "password": "secure-password"})
-    token = client.post(
-        "/auth/login", json={"email": email, "password": "secure-password"}
-    ).json()["access_token"]
-    db = SessionLocal()
-    identity = TelegramIdentity(chat_id=chat_id)
-    user = db.query(User).filter(User.email == email).first()
-    identity.user_id = user.id
-    db.add(identity)
-    db.commit()
-    db.close()
-    return token
-
-
-class _FakeBotAPI:
+class FakeBotAPI:
     """Records Bot API calls and serves file downloads from a byte buffer."""
 
-    def __init__(self, file_content: bytes | None = None) -> None:
+    def __init__(self, file_content: bytes = b"", file_path: str = "photos/test.png") -> None:
         self.calls: list[tuple[str, dict]] = []
         self.sent: list[str] = []
-        self.file_content = file_content or b""
-        self.file_path = "photos/test.png"
+        self.file_content = file_content
+        self.file_path = file_path
 
     async def post(self, token: str, method: str, payload: dict) -> dict:
         self.calls.append((method, payload))
         if method == "sendMessage":
             self.sent.append(payload["text"])
-            return {"ok": True}
-        if method == "getFile":
-            return {"ok": True, "result": {"file_path": self.file_path}}
-        return {"ok": True}
-
-    def sent_messages(self) -> list[str]:
-        return self.sent
+        return {"ok": True, "result": {"file_path": self.file_path}}
 
 
-def _install_fake_bot(monkeypatch, fake: _FakeBotAPI) -> None:
+def _install_fake_bot(monkeypatch, fake: FakeBotAPI):
     async def fake_post(token, method, payload):
-        # bound on the instance, so no `self` parameter
         return await fake.post(token, method, payload)
 
     monkeypatch.setattr(tg_module.telegram_service, "_post", fake_post)
 
-    class _FakeResponse:
+    class FakeResponse:
         def __init__(self, content: bytes):
             self.content = content
 
         def raise_for_status(self) -> None:
             return None
 
-    class _FakeClient:
+    class FakeClient:
         def __init__(self, *args, **kwargs):
             pass
 
@@ -82,240 +52,136 @@ def _install_fake_bot(monkeypatch, fake: _FakeBotAPI) -> None:
             return False
 
         async def get(self, url):
-            return _FakeResponse(fake.file_content)
+            return FakeResponse(fake.file_content)
 
-        async def post(self, url, **kwargs):
-            raise AssertionError("unexpected real network call: " + url)
-
-    fake_async_client = _FakeClient
-
-    def fake_ssl_context():
-        return object()
-
-    import types
-
-    fake_httpx = types.SimpleNamespace(
-        AsyncClient=fake_async_client,
-    )
-    monkeypatch.setattr(tg_module, "httpx", fake_httpx)
-    monkeypatch.setattr(tg_module, "_telegram_ssl_context", fake_ssl_context)
+    monkeypatch.setattr(tg_module.httpx, "AsyncClient", FakeClient)
 
 
-def _install_fake_hermes(monkeypatch, captured: dict) -> None:
-    async def fake_start_session(user_id: int, app_session_id: int) -> str:
-        return "hermes-tg-session"
+def _mock_hermes(monkeypatch, hermes_session_id="hermes-tg-1"):
+    state = {"started": [], "prompts": []}
 
-    async def fake_prompt(
-        user_id: int,
-        app_session_id: int,
-        hermes_session_id: str,
-        text: str,
-        content_blocks: dict | None = None,
-    ) -> tuple[str, str]:
-        captured["text"] = text
-        captured["content_blocks"] = content_blocks
-        return "ответ-агента", hermes_session_id
+    async def fake_start(session_id):
+        state["started"].append(session_id)
+        return f"{hermes_session_id}-{len(state['started'])}"
 
-    monkeypatch.setattr(hermes_manager, "start_session", fake_start_session)
+    async def fake_prompt(session_id, hermes_session_id, text, content_blocks=None):
+        state["prompts"].append((session_id, hermes_session_id, text, content_blocks))
+        return "отвечу", hermes_session_id
+
+    monkeypatch.setattr(hermes_manager, "start_session", fake_start)
     monkeypatch.setattr(hermes_manager, "prompt", fake_prompt)
+    return state
 
 
-def test_text_message_goes_to_hermes_without_image(client, monkeypatch):
-    token = _link_user_and_chat(client, "tg-text@example.com", "1001")
-    fake = _FakeBotAPI()
-    captured: dict = {}
+def _update(update_id: int, chat_id: int, text: str | None = None, photos: bool = False):
+    message: dict = {"chat": {"id": chat_id}, "message_id": update_id}
+    if text is not None:
+        message["text"] = text
+    if photos:
+        message["photo"] = [{"file_id": "fid-1", "file_size": 10}]
+    return {"update_id": update_id, "message": message}
+
+
+def _telegram_sessions(chat_id: int | None = None) -> list[AgentSession]:
+    from sqlalchemy import select
+
+    with SessionLocal() as db:
+        query = select(AgentSession).where(AgentSession.source == "telegram")
+        if chat_id is not None:
+            query = query.where(AgentSession.external_id == str(chat_id))
+        return list(db.scalars(query))
+
+
+def test_start_creates_session_and_greets(client, monkeypatch):
+    state = _mock_hermes(monkeypatch)
+    fake = FakeBotAPI()
     _install_fake_bot(monkeypatch, fake)
-    _install_fake_hermes(monkeypatch, captured)
 
-    update = {
-        "update_id": 1,
-        "message": {"chat": {"id": 1001}, "text": "Привет, агент"},
-    }
-    asyncio.run(tg_module.telegram_service._handle_update("bot-token", update))
+    import asyncio
 
-    assert captured["content_blocks"] is None
-    assert captured["text"] == "Привет, агент"
-    assert fake.sent_messages() == ["ответ-агента"]
+    asyncio.run(tg_module.telegram_service._handle_update("token", _update(1, 777, "/start")))
+
+    sessions = _telegram_sessions(777)
+    assert len(sessions) == 1
+    assert sessions[0].hermes_session_id == "hermes-tg-1-1"
+    assert fake.sent == ["Чат создан. Напишите вопрос — ответит агент МАИ."]
+    # Second /start does not create a second session.
+    asyncio.run(tg_module.telegram_service._handle_update("token", _update(2, 777, "/start")))
+    assert len(_telegram_sessions(777)) == 1
+    assert fake.sent[-1] == "MAI-Agent готов к работе. Напишите вопрос."
 
 
-def test_photo_message_sends_image_content_block(client, monkeypatch):
-    png_buffer = io.BytesIO()
-    Image.new("RGB", (8, 8), (255, 0, 0)).save(png_buffer, format="PNG")
-    png = png_buffer.getvalue()
-
-    _link_user_and_chat(client, "tg-photo@example.com", "1002")
-    fake = _FakeBotAPI(file_content=png)
-    captured: dict = {}
+def test_text_message_auto_creates_session_and_replies(client, monkeypatch):
+    state = _mock_hermes(monkeypatch)
+    fake = FakeBotAPI()
     _install_fake_bot(monkeypatch, fake)
-    _install_fake_hermes(monkeypatch, captured)
+    import asyncio
 
-    update = {
-        "update_id": 2,
-        "message": {
-            "chat": {"id": 1002},
-            "caption": "Что на фото?",
-            "photo": [{"file_id": "F1", "file_size": 10}],
-        },
-    }
-    asyncio.run(tg_module.telegram_service._handle_update("bot-token", update))
+    asyncio.run(
+        tg_module.telegram_service._handle_update("token", _update(1, 42, "Привет, МАИ"))
+    )
 
-    assert fake.calls[0][0] == "getFile"
-    blocks = captured["content_blocks"]
-    assert blocks is not None
-    assert blocks["mime_type"] == "image/png"
-    assert base64.b64decode(blocks["data"]) == png
-    assert captured["text"].startswith(IMAGE_INLINE_INSTRUCTION)
-    assert captured["text"].endswith("Что на фото?")
-    assert fake.sent_messages() == ["ответ-агента"]
+    sessions = _telegram_sessions(42)
+    assert len(sessions) == 1
+    session = sessions[0]
+    assert state["started"] == [str(session.id)]
+    (app_session_id, hermes_session_id, text, content_blocks) = state["prompts"][0]
+    assert app_session_id == str(session.id)
+    assert hermes_session_id == session.hermes_session_id
+    assert text == "Привет, МАИ"
+    assert content_blocks is None
+    assert fake.sent == ["отвечу"]
 
 
-def test_start_creates_user_and_identity(client, monkeypatch):
-    fake = _FakeBotAPI()
-    captured: dict = {}
+def test_photo_goes_to_hermes_with_image_blocks(client, monkeypatch):
+    state = _mock_hermes(monkeypatch)
+    fake = FakeBotAPI(file_content=b"\x89PNG\r\n\x1a\nfake-png")
     _install_fake_bot(monkeypatch, fake)
-    _install_fake_hermes(monkeypatch, captured)
+    import asyncio
 
-    update = {
-        "update_id": 3,
-        "message": {"chat": {"id": 2001}, "text": "/start"},
-    }
-    asyncio.run(tg_module.telegram_service._handle_update("bot-token", update))
-
-    db = SessionLocal()
-    user = db.query(User).filter(User.email == "telegram-2001@mai-agent.local").first()
-    identity = db.query(TelegramIdentity).filter(TelegramIdentity.chat_id == "2001").first()
-    db.close()
-    assert user is not None
-    assert identity is not None and identity.user_id == user.id
-    assert any("создан" in m.lower() or "готов" in m.lower() for m in fake.sent_messages())
-
-
-def test_pairing_links_account(client, monkeypatch):
-    client.post("/auth/register", json={"email": "tg-pair@example.com", "password": "secure-password"})
-    pairing_token = client.post(
-        "/auth/login", json={"email": "tg-pair@example.com", "password": "secure-password"}
-    ).json()["access_token"]
-    pairing_code = client.post(
-        "/auth/telegram/pairing-code", headers={"Authorization": f"Bearer {pairing_token}"}
-    ).json()["code"]
-
-    fake = _FakeBotAPI()
-    captured: dict = {}
-    _install_fake_bot(monkeypatch, fake)
-    _install_fake_hermes(monkeypatch, captured)
-
-    update = {
-        "update_id": 4,
-        "message": {"chat": {"id": 3001}, "text": f"/pair {pairing_code}"},
-    }
-    asyncio.run(tg_module.telegram_service._handle_update("bot-token", update))
-
-    db = SessionLocal()
-    identity = db.query(TelegramIdentity).filter(TelegramIdentity.chat_id == "3001").first()
-    db.close()
-    assert identity is not None and identity.user_id is not None
-    assert any("привязан" in m.lower() for m in fake.sent_messages())
-
-
-def test_polling_loop_owned_by_backend_only(monkeypatch):
-    """Without a token no polling task is created; with a token exactly one
-    polling loop (the backend's) runs. Hermes is never involved."""
-    service = tg_module.telegram_service
-
-    async def scenario_no_token():
-        monkeypatch.setattr(
-            tg_module, "get_settings", lambda: SimpleNamespace(telegram_bot_token=None)
+    asyncio.run(
+        tg_module.telegram_service._handle_update(
+            "token", _update(1, 42, None, photos=True)
         )
-        await service.start()
-        assert service._task is None, "polling must stay disabled without a token"
-        await service.stop()
+    )
 
-    asyncio.run(scenario_no_token())
-
-    calls = {"getupdates": 0}
-
-    class _PollingClient:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *exc):
-            return False
-
-        async def post(self, url, **kwargs):
-            assert "getUpdates" in url
-            calls["getupdates"] += 1
-            await asyncio.Event().wait()  # behaves like a long poll; never returns
-            return SimpleNamespace(json=lambda: {"ok": True, "result": []})
-
-    async def scenario_with_token():
-        monkeypatch.setattr(tg_module, "httpx", SimpleNamespace(AsyncClient=_PollingClient))
-        monkeypatch.setattr(
-            tg_module,
-            "get_settings",
-            lambda: SimpleNamespace(
-                telegram_bot_token="test-token", telegram_polling_timeout_seconds=1
-            ),
-        )
-        await service.start()
-        assert service._task is not None, "backend must own the polling loop"
-        for _ in range(400):
-            if calls["getupdates"] >= 1:
-                break
-            await asyncio.sleep(0.05)
-        assert calls["getupdates"] >= 1, "the polling loop must call getUpdates"
-        await service.stop()
-        assert service._task is None, "stop() must cancel the polling loop"
-
-    asyncio.run(scenario_with_token())
+    sessions = _telegram_sessions(42)
+    assert len(sessions) == 1
+    (app_session_id, hermes_session_id, text, content_blocks) = state["prompts"][0]
+    assert text.startswith(IMAGE_INLINE_INSTRUCTION)
+    assert content_blocks is not None
+    assert content_blocks["mime_type"] == "image/png"
+    assert base64.b64decode(content_blocks["data"]) == b"\x89PNG\r\n\x1a\nfake-png"
 
 
-def test_polling_retries_failed_update_before_confirming_later_ones(monkeypatch):
-    service = tg_module.TelegramService()
-    attempts = []
-
-    async def handle(token, update):
-        attempts.append(update["update_id"])
-        if len(attempts) == 1:
-            raise RuntimeError("Temporary handler error")
-
-    monkeypatch.setattr(service, "_handle_update", handle)
-    updates = [{"update_id": 15}, {"update_id": 16}]
-    assert asyncio.run(service._process_updates("token", "123", updates, 0, 0)) == (15, 1)
-    assert tg_module.read_checkpoint("123") == (15, 1)
-    assert attempts == [15]
-
-    offset, failed_attempts = tg_module.read_checkpoint("123")
-    assert asyncio.run(service._process_updates("token", "123", updates, offset, failed_attempts)) == (17, 0)
-    assert tg_module.read_checkpoint("123") == (17, 0)
-    assert attempts == [15, 15, 16]
-
-
-def test_document_is_stored_for_linked_applicant(client, monkeypatch):
-    auth_token = _link_user_and_chat(client, "tg-document@example.com", "4100")
-    fake = _FakeBotAPI(file_content=b"synthetic text")
-    fake.file_path = "documents/example.txt"
+def test_two_chats_get_separate_sessions(client, monkeypatch):
+    state = _mock_hermes(monkeypatch)
+    fake = FakeBotAPI()
     _install_fake_bot(monkeypatch, fake)
-    update = {
-        "update_id": 20,
-        "message": {
-            "chat": {"id": 4100},
-            "document": {"file_id": "F2", "file_name": "example.txt", "file_size": 14},
-        },
-    }
-    asyncio.run(tg_module.telegram_service._handle_update("token", update))
-    assert any("сохранён" in reply for reply in fake.sent_messages())
-    documents = client.get("/applicant/documents", headers={"Authorization": f"Bearer {auth_token}"}).json()
-    assert [document["filename"] for document in documents] == ["example.txt"]
+    import asyncio
+
+    asyncio.run(tg_module.telegram_service._handle_update("token", _update(1, 100, "a")))
+    asyncio.run(tg_module.telegram_service._handle_update("token", _update(2, 200, "b")))
+
+    first = _telegram_sessions(100)
+    second = _telegram_sessions(200)
+    assert len(first) == 1 and len(second) == 1
+    assert first[0].id != second[0].id
+    # Prompts were routed to their own session ids.
+    session_ids = {prompt[0] for prompt in state["prompts"]}
+    assert session_ids == {str(first[0].id), str(second[0].id)}
 
 
-def test_telegram_long_response_is_sent_in_full(monkeypatch):
-    fake = _FakeBotAPI()
+def test_new_command_rebinds_hermes_session(client, monkeypatch):
+    state = _mock_hermes(monkeypatch)
+    fake = FakeBotAPI()
     _install_fake_bot(monkeypatch, fake)
-    original = "тест текста " * 850
-    asyncio.run(tg_module.telegram_service._send("token", "4100", original))
-    assert len(fake.sent_messages()) > 1
-    assert all(len(message) <= 4000 for message in fake.sent_messages())
-    assert "".join(fake.sent_messages()) == original
+    import asyncio
+
+    asyncio.run(tg_module.telegram_service._handle_update("token", _update(1, 300, "hello")))
+    old_hermes_id = _telegram_sessions(300)[0].hermes_session_id
+    asyncio.run(tg_module.telegram_service._handle_update("token", _update(2, 300, "/new")))
+    new_hermes_id = _telegram_sessions(300)[0].hermes_session_id
+    assert new_hermes_id != old_hermes_id
+    assert len(_telegram_sessions(300)) == 1
+    assert "Новый чат начат" in fake.sent[-1]

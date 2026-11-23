@@ -10,9 +10,6 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+psycopg://mai_agent:change_me@localhost:5432/mai_agent"
     )
-    jwt_secret_key: str = Field(default="change_me_in_local_environment")
-    jwt_algorithm: str = "HS256"
-    access_token_expire_minutes: int = 30
     acp_transport: str = "stdio"
     hermes_command: str = "hermes-acp"
     hermes_cwd: str = "."

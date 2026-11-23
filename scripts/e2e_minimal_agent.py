@@ -1,9 +1,11 @@
-"""End-to-end test for the minimal MAI-Agent architecture.
+"""End-to-end test for the sessionless MAI-Agent architecture.
 
 Exercises the full chain Web API -> Backend -> ACP -> Hermes Agent:
-plain chat, history, image analysis (native vision), file read/write,
-terminal execution, the SQL MCP tool, the synthetic ФИС ГИА MCP tool,
-native Hermes toolsets, and per-user session isolation.
+session create, plain chat, history, context continuation, image
+analysis (native vision), file read/write, terminal execution, SQL MCP
+tool, synthetic ФИС ГИА MCP tool, native Hermes toolsets, and
+cross-session isolation. No accounts, no tokens: the client is
+identified by the session UUID.
 
 Usage (needs the docker stack running on the default ports):
     python scripts/e2e_minimal_agent.py [base_url]
@@ -11,14 +13,13 @@ Usage (needs the docker stack running on the default ports):
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import struct
 import sys
-import time
 import urllib.error
 import urllib.request
-import uuid
 import zlib
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
@@ -32,20 +33,13 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"{'PASS' if ok else 'FAIL'}  {name}" + (f"  -- {detail[:300]}" if detail and not ok else ""), flush=True)
 
 
-def request(method: str, path: str, token: str | None = None, json_body: dict | None = None,
-            raw_body: bytes | None = None, content_type: str | None = None) -> tuple[int, dict]:
+def request(method: str, path: str, json_body: dict | None = None) -> tuple[int, dict]:
     url = BASE + path
     headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     body = None
     if json_body is not None:
         body = json.dumps(json_body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    elif raw_body is not None:
-        body = raw_body
-        if content_type:
-            headers["Content-Type"] = content_type
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
@@ -59,24 +53,26 @@ def request(method: str, path: str, token: str | None = None, json_body: dict | 
             return exc.code, {"raw": data[:500].decode("utf-8", "replace")}
 
 
-def register_login(email: str, password: str) -> str:
-    status, _ = request("POST", "/auth/register", json_body={"email": email, "password": password})
-    if status not in (200, 201, 409):
-        raise RuntimeError(f"register failed: {status}")
-    status, body = request("POST", "/auth/login", json_body={"email": email, "password": password})
-    if status != 200:
-        raise RuntimeError(f"login failed: {status} {body}")
-    return body["access_token"]
+def create_session() -> dict:
+    status, body = request("POST", "/chat/sessions", json_body={})
+    if status not in (200, 201):
+        raise RuntimeError(f"create session failed: {status} {body}")
+    return body
 
 
-def chat(token: str, session_id: int, content: str, image_document_id: int | None = None) -> dict:
+def chat(session_id: str, content: str, image: dict | None = None) -> dict:
     status, body = request(
-        "POST", f"/chat/sessions/{session_id}/messages", token,
-        json_body={"content": content, "image_document_id": image_document_id},
+        "POST", f"/chat/sessions/{session_id}/messages",
+        json_body={"content": content, "image": image},
     )
     if status != 200:
         raise RuntimeError(f"chat message failed: {status} {body}")
     return body
+
+
+def history(session_id: str) -> tuple[int, list[dict]]:
+    status, body = request("GET", f"/chat/sessions/{session_id}/messages")
+    return status, (body if isinstance(body, list) else [])
 
 
 def make_png() -> bytes:
@@ -103,86 +99,70 @@ def make_png() -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 
 
-def upload_image(token: str, png: bytes) -> int:
-    boundary = f"----maie2e{uuid.uuid4().hex}"
-    head = (
-        f"--{boundary}\r\n"
-        'Content-Disposition: form-data; name="file"; filename="e2e-image.png"\r\n'
-        "Content-Type: image/png\r\n\r\n"
-    ).encode("ascii")
-    tail = (
-        f"\r\n--{boundary}\r\n"
-        'Content-Disposition: form-data; name="document_type"\r\n\r\n'
-        f"image\r\n--{boundary}--\r\n"
-    ).encode("ascii")
-    status, body = request(
-        "POST", "/applicant/documents", token,
-        raw_body=head + png + tail,
-        content_type=f"multipart/form-data; boundary={boundary}",
-    )
-    if status not in (200, 201):
-        raise RuntimeError(f"image upload failed: {status} {body}")
-    return body["id"]
-
-
 def main() -> int:
-    stamp = int(time.time())
-    email_a = f"e2e-min-{stamp}@mai-agent.io"
-    email_b = f"e2e-min-b-{stamp}@mai-agent.io"
-    token_a = register_login(email_a, "Password123!")
-    check("register + login (web user)", True)
+    # Health.
+    status, _ = request("GET", "/health")
+    check("backend /health", status == 200, str(status))
 
-    status, session = request("POST", "/chat/sessions", token_a, json_body={})
-    check("create chat session", status in (200, 201), f"{status} {session}")
-    session_id = session["id"]
-    hermes_session_a = session.get("hermes_session_id")
+    # 1. Session creation (web, no auth): stable UUID + Hermes session id.
+    session = create_session()
+    sid = session.get("id", "")
+    hermes_a = session.get("hermes_session_id") or ""
+    check("session created (no auth), UUID + Hermes id",
+          bool(re.fullmatch(r"[0-9a-f-]{36}", sid)) and bool(hermes_a), str(session)[:200])
 
-    # 1. Plain message and reply.
-    reply = chat(token_a, session_id, "Напиши ровно одну строку: MAI_E2E_OK")
+    status, _ = request("GET", f"/chat/sessions/{sid}")
+    check("session readable by UUID", status == 200, str(status))
+
+    # 2. Plain message and reply.
+    reply = chat(sid, "Напиши ровно одну строку: MAI_E2E_OK")
     check("plain message -> agent reply", "MAI_E2E_OK" in reply.get("content", ""), str(reply)[:200])
 
-    # 2. History is stored and can be restored through the API.
-    status, messages = request("GET", f"/chat/sessions/{session_id}/messages", token_a)
+    # 3. History is served back from the Hermes transcript.
+    status, messages = history(sid)
     roles = [m.get("role") for m in messages]
-    check("history: user + assistant messages stored",
-          status == 200 and "user" in roles and "assistant" in roles, str(roles))
-    status, sessions = request("GET", "/chat/sessions", token_a)
-    check("history: session listed", status == 200 and any(s.get("id") == session_id for s in sessions), str(sessions)[:200])
+    contents = " ".join(m.get("content", "") for m in messages)
+    check("history: user + assistant messages from Hermes",
+          status == 200 and "user" in roles and "assistant" in roles and "MAI_E2E_OK" in contents,
+          f"roles={roles}")
 
-    # 3. Image upload + native vision analysis.
-    doc_id = upload_image(token_a, make_png())
-    check("image uploaded", doc_id > 0, str(doc_id))
-    reply = chat(token_a, session_id, "Опиши коротко это изображение: какие фигуры и цвета на нём?", doc_id)
+    # 4. Context continuation inside the same session.
+    reply = chat(sid, "Какое точное слово я просил написать в прошлом сообщении этого диалога? Ответь только этим словом.")
+    check("context continuation in same session", "MAI_E2E_OK" in reply.get("content", ""), str(reply)[:200])
+
+    # 5. Image analysis (native vision): base64 payload in the message body.
+    png_b64 = base64.b64encode(make_png()).decode("ascii")
+    reply = chat(sid, "Опиши коротко это изображение: какие фигуры и цвета на нём?",
+                 image={"data": png_b64, "mime_type": "image/png"})
     text = reply.get("content", "").casefold()
     keywords = ("син", "красн", "круг", "прямоуг", "blue", "red", "circle", "rectangle")
     check("image analysed by agent", len(text) > 20 and any(k in text for k in keywords), str(reply)[:250])
 
-    # 4. File create + read (native file tools).
-    reply = chat(token_a, session_id,
+    # 6. File create + read (native file tools).
+    reply = chat(sid,
                  "Создай текстовый файл e2e_note.txt в твоей рабочей директории с содержимым HELLO_FROM_AGENT. "
                  "Затем прочитай этот файл и процитируй его содержимое в ответе.")
     check("file create + read via native tools", "HELLO_FROM_AGENT" in reply.get("content", ""), str(reply)[:250])
 
-    # 5. Terminal command execution.
-    reply = chat(token_a, session_id,
-                 "Выполни в терминале команду: echo MAI_TERM_OK. Ответь только точным выводом команды.")
+    # 7. Terminal command execution.
+    reply = chat(sid, "Выполни в терминале команду: echo MAI_TERM_OK. Ответь только точным выводом команды.")
     check("terminal command executed", "MAI_TERM_OK" in reply.get("content", ""), str(reply)[:250])
 
-    # 6. SQL data source via the sql_query MCP tool.
-    reply = chat(token_a, session_id,
+    # 8. SQL data source via the sql_query MCP tool.
+    reply = chat(sid,
                  "Используй MCP-инструмент sql_query, чтобы посчитать количество строк в таблице "
                  "synthetic_ege_results. Ответь только количеством строк.")
     check("SQL source queried via MCP", re.search(r"\b30\b", reply.get("content", "")) is not None, str(reply)[:250])
 
-    # 7. Synthetic ФИС ГИА via the existing MCP registry tool.
-    reply = chat(token_a, session_id,
+    # 9. Synthetic ФИС ГИА via the MCP registry tool.
+    reply = chat(sid,
                  "Найди в синтетическом реестре ЕГЭ участника «Алексей Иванович Иванов» "
                  "(дата рождения 14.03.2008) и назови его результаты ЕГЭ 2026 по каждому предмету.")
     scores = [s for s in ("92", "88", "100") if re.search(rf"\b{s}\b", reply.get("content", ""))]
     check("ФИС ГИА registry queried via MCP", len(scores) >= 2, f"scores seen: {scores} :: {str(reply)[:250]}")
 
-    # 8. Native Hermes toolsets (terminal / file / memory) visible to the agent.
-    reply = chat(token_a, session_id,
+    # 10. Native Hermes toolsets visible to the agent.
+    reply = chat(sid,
                  "Перечисли имена всех твоих доступных инструментов (tool names) через запятую. "
                  "Только список имён, без пояснений.")
     tools_text = reply.get("content", "").casefold()
@@ -190,27 +170,37 @@ def main() -> int:
     check("native tools visible: files", bool(re.search(r"read|write|file", tools_text)), str(reply)[:250])
     check("native tools visible: memory/session", bool(re.search(r"memor|session", tools_text)), str(reply)[:250])
 
-    # 9. Session isolation: a second user gets a separate agent session.
-    token_b = register_login(email_b, "Password123!")
-    status, sessions_b = request("GET", "/chat/sessions", token_b)
-    check("second user: no inherited sessions",
-          status == 200 and len(sessions_b) == 0, str(sessions_b)[:200])
-    status, session_b = request("POST", "/chat/sessions", token_b, json_body={})
-    hermes_session_b = session_b.get("hermes_session_id")
-    check("second user: separate Hermes session",
-          status in (200, 201) and hermes_session_b and hermes_session_b != hermes_session_a,
-          f"a={hermes_session_a} b={hermes_session_b}")
-    status, sessions_a = request("GET", "/chat/sessions", token_a)
-    check("first user: history untouched by second user",
-          status == 200 and any(s.get("id") == session_id for s in sessions_a), str(sessions_a)[:200])
+    # 11. Cross-session isolation: a second web session does not see the first.
+    session_b = create_session()
+    sid_b = session_b.get("id", "")
+    hermes_b = session_b.get("hermes_session_id") or ""
+    check("second session: separate Hermes session",
+          bool(hermes_b) and hermes_b != hermes_a, f"a={hermes_a} b={hermes_b}")
+    reply = chat(sid_b, "Напиши ровно одну строку: ISO_B_OK")
+    check("second session: agent reply", "ISO_B_OK" in reply.get("content", ""), str(reply)[:200])
+    _, messages_a = history(sid)
+    contents_a = " ".join(m.get("content", "") for m in messages_a)
+    check("isolation: session A history has no session B content",
+          "ISO_B_OK" not in contents_a, f"len={len(contents_a)}")
+    _, messages_b = history(sid_b)
+    contents_b = " ".join(m.get("content", "") for m in messages_b)
+    check("isolation: session B history has no session A content",
+          "MAI_E2E_OK" not in contents_b, f"len={len(contents_b)}")
+
+    # 12. Telegram-side session mapping (source=telegram, external_id -> one session).
+    status, tg = request("POST", "/chat/sessions", json_body={"source": "telegram", "external_id": "e2e-chat-1"})
+    check("telegram session created from chat id", status in (200, 201) and tg.get("id"), str(tg)[:200])
+    status, tg_again = request("POST", "/chat/sessions", json_body={"source": "telegram", "external_id": "e2e-chat-1"})
+    check("telegram chat id maps to the same session",
+          status in (200, 201) and tg_again.get("id") == tg.get("id"), str(tg_again)[:200])
 
     passed = sum(1 for r in RESULTS if r["ok"])
     print(f"\n{passed}/{len(RESULTS)} checks passed")
-    print("accounts to clean up: " + ", ".join((email_a, email_b)))
+    print(f"sessions created (web): {sid}, {sid_b}; telegram external id: e2e-chat-1 -> {tg.get('id')}")
     out = sys.argv[2] if len(sys.argv) > 2 else None
     if out:
         with open(out, "w", encoding="utf-8") as fh:
-            json.dump({"base": BASE, "results": RESULTS}, fh, ensure_ascii=False, indent=2)
+            json.dump({"base": BASE, "results": RESULTS, "sessions": {"web_a": sid, "web_b": sid_b, "telegram": tg.get("id")}}, fh, ensure_ascii=False, indent=2)
     return 0 if passed == len(RESULTS) else 1
 
 

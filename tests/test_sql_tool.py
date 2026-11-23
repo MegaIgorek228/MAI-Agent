@@ -21,22 +21,11 @@ def test_validate_accepts_selects():
 
 def test_validate_rejects_non_select_and_multiple_statements():
     with pytest.raises(ValueError, match="SELECT"):
-        _validate_readonly_sql("DELETE FROM applications WHERE id = 1")
+        _validate_readonly_sql("DELETE FROM knowledge_sources WHERE id = 1")
     with pytest.raises(ValueError, match="single"):
-        _validate_readonly_sql("SELECT 1; UPDATE users SET is_active = 0")
+        _validate_readonly_sql("SELECT 1; UPDATE knowledge_sources SET title = ''")
     with pytest.raises(ValueError, match="Empty"):
         _validate_readonly_sql("   ")
-
-
-def test_validate_forbids_account_tables():
-    with pytest.raises(ValueError, match="users"):
-        _validate_readonly_sql("SELECT * FROM users")
-    with pytest.raises(ValueError, match="staff_invites"):
-        _validate_readonly_sql(
-            "SELECT s.id FROM applications a JOIN staff_invites s ON a.id = s.application_id"
-        )
-    # Other tables remain accessible.
-    assert _validate_readonly_sql("SELECT * FROM applications") == "SELECT * FROM applications"
 
 
 def test_run_readonly_sql_returns_rows_and_caps_limit():

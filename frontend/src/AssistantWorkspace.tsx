@@ -1,21 +1,21 @@
 import { type ChangeEvent, type FormEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { type ChatMessage, type ChatSession, documentFileUrl } from "./api";
+import { type ChatMessage, type WebSession } from "./api";
 import { Icon } from "./Icon";
 import "./assistant.css";
 
 type AssistantWorkspaceProps = {
-  token: string;
-  sessionId: number | null;
-  sessions: ChatSession[];
+  sessionId: string | null;
+  sessions: WebSession[];
   messages: ChatMessage[];
   input: string;
   pending: boolean;
   historyLoading: boolean;
   attachment: { name: string; previewUrl: string } | null;
   onInputChange: (value: string) => void;
-  onOpenSession: (id: number) => void;
+  onOpenSession: (id: string) => void;
   onStartSession: () => void;
+  onDeleteSession: (id: string) => void;
   onRefreshHistory: () => void;
   onSend: (event: FormEvent<HTMLFormElement>) => void;
   onAttach: (event: ChangeEvent<HTMLInputElement>) => void;
@@ -36,11 +36,6 @@ const sessionDateFormat = new Intl.DateTimeFormat("ru-RU", {
   minute: "2-digit"
 });
 
-const messageTimeFormat = new Intl.DateTimeFormat("ru-RU", {
-  hour: "2-digit",
-  minute: "2-digit"
-});
-
 function formatDate(date: string | undefined, formatter: Intl.DateTimeFormat) {
   if (!date) return "";
   const parsed = new Date(date);
@@ -48,7 +43,7 @@ function formatDate(date: string | undefined, formatter: Intl.DateTimeFormat) {
 }
 
 function MessageText({ content }: { content: string }) {
-  return content.split(/(https?:\/\/[^\s<>{}\[\]"']+)/g).map((part, index) => {
+  return content.split(/(https?:\/\/[^\s<>\[\]\"']+)/g).map((part, index) => {
     if (index % 2 === 0) return part;
     const url = part.replace(/[.,!?;:)]+$/, "");
     return (
@@ -61,7 +56,6 @@ function MessageText({ content }: { content: string }) {
 }
 
 export function AssistantWorkspace({
-  token,
   sessionId,
   sessions,
   messages,
@@ -72,6 +66,7 @@ export function AssistantWorkspace({
   onInputChange,
   onOpenSession,
   onStartSession,
+  onDeleteSession,
   onRefreshHistory,
   onSend,
   onAttach,
@@ -143,11 +138,11 @@ export function AssistantWorkspace({
           <div className="assistant-history-heading">
             <h2>История диалогов</h2>
             <button
-              aria-label="Обновить список диалогов"
+              aria-label="Обновить историю диалога"
               className="assistant-icon-button"
               disabled={historyLoading || pending}
               onClick={onRefreshHistory}
-              title="Обновить список диалогов"
+              title="Обновить историю диалога"
               type="button"
             ><Icon name="refresh" /></button>
           </div>
@@ -160,10 +155,11 @@ export function AssistantWorkspace({
             <ul className="assistant-session-list">
               {sessions.map((session) => {
                 const date = formatDate(session.created_at, sessionDateFormat);
+                const isActive = session.id === sessionId;
                 return (
-                  <li key={session.id}>
+                  <li key={session.id} className="assistant-session-row">
                     <button
-                      aria-current={session.id === sessionId ? "true" : undefined}
+                      aria-current={isActive ? "true" : undefined}
                       className="assistant-session"
                       disabled={pending}
                       onClick={() => {
@@ -172,15 +168,23 @@ export function AssistantWorkspace({
                       }}
                       type="button"
                     >
-                      <Icon name={session.channel === "telegram" ? "telegram" : "chat"} />
+                      <Icon name="chat" />
                       <span>
-                        <strong>Диалог №{session.id}</strong>
+                        <strong>Диалог</strong>
                         <small>
-                          {session.channel === "telegram" ? "Telegram" : "Веб"}
+                          Веб
                           {date && <><span aria-hidden="true"> · </span><time dateTime={session.created_at}>{date}</time></>}
                         </small>
                       </span>
                     </button>
+                    <button
+                      aria-label="Удалить диалог"
+                      className="assistant-icon-button assistant-session-delete"
+                      disabled={pending}
+                      onClick={() => onDeleteSession(session.id)}
+                      title="Удалить диалог"
+                      type="button"
+                    ><Icon name="x" /></button>
                   </li>
                 );
               })}
@@ -193,7 +197,7 @@ export function AssistantWorkspace({
         <header className="assistant-panel-header">
           <div className="assistant-column">
             <h1 id="assistant-title">Чат с помощником</h1>
-            {sessionId && <p>Диалог №{sessionId}</p>}
+            {sessionId && <p>Сессия {sessionId.slice(0, 8)}</p>}
           </div>
         </header>
 
@@ -211,24 +215,13 @@ export function AssistantWorkspace({
             <div className="assistant-column assistant-thread">
               {messages.map((message, index) => {
                 const isUser = message.role === "user";
-                const time = formatDate(message.created_at, messageTimeFormat);
                 return (
                   <article className={isUser ? "assistant-message from-user" : "assistant-message"} key={index}>
                     <div className="assistant-message-content">
                       <header>
                         <strong>{isUser ? "Вы" : "Помощник МАИ"}</strong>
-                        {time && <time dateTime={message.created_at}>{time}</time>}
                       </header>
                       <div className="assistant-bubble">
-                        {message.image_document_id && (
-                          <img
-                            alt={message.image_filename || "Прикреплённое изображение"}
-                            className="assistant-message-image"
-                            loading="lazy"
-                            onLoad={scrollToTail}
-                            src={documentFileUrl(token, message.image_document_id)}
-                          />
-                        )}
                         <p><MessageText content={message.content} /></p>
                       </div>
                     </div>

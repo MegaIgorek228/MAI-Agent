@@ -1,310 +1,234 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { ChangeEvent, FormEvent } from "react";
 
 import {
-  ApiError,
   createChatSession,
+  deleteChatSession,
   getChatMessages,
-  getCurrentUser,
-  listChatSessions,
-  login,
-  register,
-  sendChatMessage,
-  uploadDocument,
+  requestErrorMessage,
+  sendChatMessage
 } from "./api";
-import type { ChatMessage, ChatSession, User } from "./api";
+import type { ChatMessage, ImagePayload, WebSession } from "./api";
 import { AssistantWorkspace } from "./AssistantWorkspace";
-import { requestErrorMessage } from "./Documents";
-import { AuthScreen, Workspace } from "./Portal";
-import type { AuthMode, RegisterType } from "./Portal";
+import { ChatShell } from "./Portal";
 import "./styles.css";
 
-type ChatAttachment = { documentId: number; name: string; previewUrl: string };
+type Attachment = { payload: ImagePayload; name: string; previewUrl: string };
 
-const sessionKey = "mai-agent.session";
-const chatSessionKey = "mai-agent.chat-session";
+const sessionsKey = "mai-agent.web-sessions";
+const activeKey = "mai-agent.active-session";
 
-function readSessionToken(): string | null {
+function readStoredSessions(): WebSession[] {
   try {
-    return window.sessionStorage.getItem(sessionKey);
+    const raw = window.localStorage.getItem(sessionsKey);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item): item is { id: string; created_at: string } =>
+        Boolean(item) && typeof item.id === "string" && typeof item.created_at === "string"
+      )
+      .map((item): WebSession => ({
+        id: item.id,
+        source: "web",
+        created_at: item.created_at,
+        updated_at: item.created_at
+      }));
   } catch {
-    return null;
+    return [];
   }
 }
 
-function storeSessionToken(token: string | null) {
+function storeSessions(sessions: WebSession[], activeId: string | null) {
   try {
-    if (token) window.sessionStorage.setItem(sessionKey, token);
-    else window.sessionStorage.removeItem(sessionKey);
+    window.localStorage.setItem(sessionsKey, JSON.stringify(sessions));
+    if (activeId) window.localStorage.setItem(activeKey, activeId);
+    else window.localStorage.removeItem(activeKey);
   } catch {
-    // The active page can still use its in-memory session if storage is blocked.
-  }
-}
-
-function readChatSessionId(): number | null {
-  try {
-    const raw = window.sessionStorage.getItem(chatSessionKey);
-    return raw ? Number(raw) : null;
-  } catch {
-    return null;
-  }
-}
-
-function storeChatSessionId(id: number | null) {
-  try {
-    if (id !== null) window.sessionStorage.setItem(chatSessionKey, String(id));
-    else window.sessionStorage.removeItem(chatSessionKey);
-  } catch {
-    // storage is optional
+    // Storage is optional: the page keeps its in-memory session list.
   }
 }
 
 export function App() {
-  const [mode, setMode] = useState<AuthMode>("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [registerType, setRegisterType] = useState<RegisterType>("applicant");
-  const [inviteCode, setInviteCode] = useState("");
-  const [authPending, setAuthPending] = useState(false);
-  const [token, setToken] = useState(readSessionToken);
-  const [user, setUser] = useState<User | null>(null);
-  const [error, setError] = useState("");
-  const [restoreError, setRestoreError] = useState("");
-  const [restoreAttempt, setRestoreAttempt] = useState(0);
-
-  useEffect(() => {
-    if (!token) return;
-    let ignore = false;
-
-    getCurrentUser(token).then((currentUser) => {
-      if (!ignore) setUser(currentUser);
-    }).catch((requestError: unknown) => {
-      if (ignore) return;
-      if (requestError instanceof ApiError && (requestError.status === 401 || requestError.status === 403)) {
-        storeSessionToken(null);
-        setToken(null);
-        setError("Сеанс завершился. Войдите снова.");
-      } else {
-        setRestoreError(requestErrorMessage(requestError, "Не удалось восстановить сеанс"));
-      }
-    });
-
-    return () => { ignore = true; };
-  }, [token, restoreAttempt]);
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (authPending) return;
-    setError("");
-    setAuthPending(true);
-
+  const [sessions, setSessions] = useState<WebSession[]>(readStoredSessions);
+  const [activeId, setActiveId] = useState<string | null>(() => {
+    const stored = readStoredSessions();
     try {
-      if (mode === "register") {
-        await register(email, password, registerType === "staff" ? inviteCode : undefined);
-        setInviteCode("");
-      }
-      const response = await login(email, password);
-      storeSessionToken(response.access_token);
-      setPassword("");
-      setToken(response.access_token);
-    } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось войти в кабинет"));
-    } finally {
-      setAuthPending(false);
+      const active = window.localStorage.getItem(activeKey);
+      return active && stored.some((session) => session.id === active)
+        ? active
+        : stored[0]?.id ?? null;
+    } catch {
+      return stored[0]?.id ?? null;
     }
-  };
-
-  const logout = () => {
-    storeSessionToken(null);
-    storeChatSessionId(null);
-    setToken(null);
-    setUser(null);
-    setError("");
-    setRestoreError("");
-  };
-
-  if (token && user) return <SessionWorkspace key={token} token={token} user={user} onLogout={logout} />;
-
-  if (token) {
-    return (
-      <main className="session-restore" aria-busy={!restoreError}>
-        <h1>{restoreError ? "Не удалось открыть MAI Agent" : "Открываем MAI Agent"}</h1>
-        {restoreError ? (
-          <>
-            <p className="error" role="alert">{restoreError}</p>
-            <div className="actions">
-              <button type="button" onClick={() => {
-                setRestoreError("");
-                setRestoreAttempt((attempt) => attempt + 1);
-              }}>Повторить</button>
-              <button type="button" className="button-secondary" onClick={logout}>Выйти</button>
-            </div>
-          </>
-        ) : <p role="status">Загружаем данные учётной записи…</p>}
-      </main>
-    );
-  }
-
-  return <AuthScreen mode={mode} email={email} password={password} error={error} pending={authPending}
-    registerType={registerType} inviteCode={inviteCode}
-    onEmailChange={setEmail} onPasswordChange={setPassword}
-    onRegisterTypeChange={setRegisterType} onInviteCodeChange={setInviteCode}
-    onSubmit={submit} onModeChange={() => {
-      setError("");
-      setInviteCode("");
-      setMode((current) => current === "login" ? "register" : "login");
-    }} />;
-}
-
-function SessionWorkspace({ token, user, onLogout }: { token: string; user: User; onLogout: () => void }) {
-  const [error, setError] = useState("");
-  const [chatSessionId, setChatSessionId] = useState<number | null>(null);
-  const [chatSessions, setChatSessions] = useState<ChatSession[]>([]);
-  const [historyRefresh, setHistoryRefresh] = useState(0);
+  });
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [pending, setPending] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
-  const [chatAttachment, setChatAttachment] = useState<ChatAttachment | null>(null);
+  const [error, setError] = useState("");
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
 
-  useEffect(() => {
-    if (!chatAttachment) return;
-    return () => URL.revokeObjectURL(chatAttachment.previewUrl);
-  }, [chatAttachment]);
+  const persistSessions = useCallback((next: WebSession[], nextActive: string | null) => {
+    setSessions(next);
+    setActiveId(nextActive);
+    storeSessions(next, nextActive);
+  }, []);
 
-  // Load the dialog history and restore the last active dialog for this browser tab.
+  const loadHistory = useCallback(async (id: string) => {
+    setHistoryLoading(true);
+    setError("");
+    try {
+      setMessages(await getChatMessages(id));
+    } catch (requestError) {
+      setError(requestErrorMessage(requestError, "Не удалось восстановить историю диалога"));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  // Restore the active dialog, or create the first one.
   useEffect(() => {
+    if (activeId) {
+      void loadHistory(activeId);
+      return;
+    }
     let ignore = false;
     setHistoryLoading(true);
-    (async () => {
-      try {
-        const sessions = await listChatSessions(token);
+    createChatSession()
+      .then((session) => {
         if (ignore) return;
-        setChatSessions(sessions);
-        const stored = readChatSessionId();
-        const preferred = sessions.find((session) => session.id === stored) ?? sessions[0];
-        const id = preferred?.id ?? null;
-        setChatSessionId(id);
-        if (id === null) {
-          setChatMessages([]);
-          return;
+        persistSessions([session], session.id);
+        setMessages([]);
+      })
+      .catch((requestError: unknown) => {
+        if (!ignore) {
+          setError(requestErrorMessage(requestError, "Не удалось создать диалог"));
+          setHistoryLoading(false);
         }
-        storeChatSessionId(id);
-        setChatMessages(await getChatMessages(token, id));
-      } catch (requestError) {
-        if (!ignore) setError(requestErrorMessage(requestError, "Не удалось открыть историю диалогов"));
-      } finally {
-        if (!ignore) setHistoryLoading(false);
-      }
-    })();
+      });
     return () => { ignore = true; };
-  }, [token, historyRefresh]);
+  }, [activeId, loadHistory, persistSessions]);
 
-  const createAndRememberChat = async () => {
-    const session = await createChatSession(token);
-    setChatSessionId(session.id);
-    storeChatSessionId(session.id);
-    setChatSessions((current) => [
-      { id: session.id, channel: session.channel, created_at: new Date().toISOString() },
-      ...current.filter(({ id }) => id !== session.id),
-    ]);
-    setHistoryRefresh((value) => value + 1);
-    return session.id;
-  };
+  useEffect(() => {
+    if (!attachment) return;
+    return () => URL.revokeObjectURL(attachment.previewUrl);
+  }, [attachment]);
 
-  const openChat = async (id: number) => {
-    if (chatLoading || id === chatSessionId) return;
+  const startSession = async () => {
+    if (pending) return;
     setError("");
-    setChatLoading(true);
+    setPending(true);
     try {
-      const messages = await getChatMessages(token, id);
-      setChatSessionId(id);
-      storeChatSessionId(id);
-      setChatMessages(messages);
-      setChatInput("");
-      setChatAttachment(null);
+      const session = await createChatSession();
+      persistSessions([session, ...sessions], session.id);
+      setMessages([]);
+      setInput("");
+      setAttachment(null);
     } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось восстановить диалог"));
+      setError(requestErrorMessage(requestError, "Не удалось начать новый диалог"));
     } finally {
-      setChatLoading(false);
+      setPending(false);
     }
   };
 
-  const startChat = async () => {
-    if (chatLoading) return;
-    setError("");
-    setChatLoading(true);
+  const openSession = async (id: string) => {
+    if (pending || id === activeId) return;
+    setActiveId(id);
+    storeSessions(sessions, id);
+    setMessages([]);
+    setInput("");
+    setAttachment(null);
+    await loadHistory(id);
+  };
+
+  const removeSession = async (id: string) => {
+    if (pending) return;
     try {
-      await createAndRememberChat();
-      setChatMessages([]);
-      setChatInput("");
-      setChatAttachment(null);
-    } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось начать диалог"));
-    } finally {
-      setChatLoading(false);
+      await deleteChatSession(id);
+    } catch {
+      // The local list is authoritative for the UI; drop the entry regardless.
     }
+    const next = sessions.filter((session) => session.id !== id);
+    const nextActive = activeId === id ? (next[0]?.id ?? null) : activeId;
+    persistSessions(next, nextActive);
+    if (activeId === id) setMessages([]);
   };
 
   const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (chatLoading || (!chatInput.trim() && !chatAttachment)) return;
-    const content = chatInput.trim() || "Проанализируй прикреплённое изображение.";
-    const previousMessages = chatMessages;
-    let sessionId = chatSessionId;
+    if (pending || (!input.trim() && !attachment)) return;
+    const content = input.trim() || "Проанализируй прикреплённое изображение.";
     setError("");
-    setChatLoading(true);
-
+    setPending(true);
+    const previous = messages;
     try {
-      sessionId = sessionId ?? await createAndRememberChat();
-      setChatMessages([...previousMessages, {
-        role: "user",
-        content,
-        image_document_id: chatAttachment?.documentId ?? null,
-        image_filename: chatAttachment?.name ?? null,
-      }]);
-      const response = await sendChatMessage(token, sessionId, content, chatAttachment?.documentId);
-      setChatMessages((current) => [...current, response]);
-      setChatInput("");
-      setChatAttachment(null);
+      if (!activeId) throw new Error("Диалог ещё не готов");
+      setMessages([...previous, { role: "user", content }]);
+      const reply = await sendChatMessage(activeId, content, attachment?.payload);
+      setMessages((current) => [...current, reply]);
+      setInput("");
+      setAttachment(null);
+      persistSessions(
+        sessions.map((session) =>
+          session.id === activeId ? { ...session, updated_at: new Date().toISOString() } : session
+        ),
+        activeId
+      );
     } catch (requestError) {
       setError(requestErrorMessage(requestError, "Не удалось отправить сообщение"));
-      if (sessionId !== null) {
-        setChatMessages(await getChatMessages(token, sessionId).catch(() => previousMessages));
-      }
+      setMessages(previous);
     } finally {
-      setChatLoading(false);
+      setPending(false);
     }
   };
 
-  const attachChatImage = async (event: ChangeEvent<HTMLInputElement>) => {
+  const attachImage = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (!file || chatLoading) return;
+    event.target.value = "";
+    if (!file || pending) return;
     setError("");
-    setChatLoading(true);
     try {
-      const uploaded = await uploadDocument(token, file, "image");
-      setChatAttachment({ documentId: uploaded.id, name: file.name, previewUrl: URL.createObjectURL(file) });
-    } catch (requestError) {
-      setError(requestErrorMessage(requestError, "Не удалось загрузить изображение"));
-    } finally {
-      setChatLoading(false);
-      event.target.value = "";
+      const data = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = String(reader.result ?? "");
+          const base64 = result.slice(result.indexOf(",") + 1);
+          if (base64) resolve(base64);
+          else reject(new Error("Пустой файл"));
+        };
+        reader.onerror = () => reject(new Error("Не удалось прочитать файл"));
+        reader.readAsDataURL(file);
+      });
+      setAttachment({
+        payload: { data, mime_type: file.type || "image/png" },
+        name: file.name,
+        previewUrl: URL.createObjectURL(file)
+      });
+    } catch {
+      setError("Не удалось подготовить изображение");
     }
   };
 
   return (
-    <Workspace chatOnly user={user} profile={null} view="agent" error={error}
-      onNavigate={() => {}} onLogout={onLogout}>
-      <AssistantWorkspace token={token} sessionId={chatSessionId}
-        sessions={chatSessions} messages={chatMessages} input={chatInput} pending={chatLoading}
-        historyLoading={historyLoading} attachment={chatAttachment}
-        onInputChange={setChatInput} onOpenSession={openChat} onStartSession={startChat}
-        onRefreshHistory={() => {
-          setError("");
-          setHistoryRefresh((value) => value + 1);
-        }}
-        onSend={sendMessage} onAttach={attachChatImage} onRemoveAttachment={() => setChatAttachment(null)} />
-    </Workspace>
+    <ChatShell>
+      {error && <p className="error global-error" role="alert">{error}</p>}
+      <AssistantWorkspace
+        sessionId={activeId}
+        sessions={sessions}
+        messages={messages}
+        input={input}
+        pending={pending}
+        historyLoading={historyLoading}
+        attachment={attachment ? { name: attachment.name, previewUrl: attachment.previewUrl } : null}
+        onInputChange={setInput}
+        onOpenSession={openSession}
+        onStartSession={startSession}
+        onDeleteSession={removeSession}
+        onRefreshHistory={() => { if (activeId) void loadHistory(activeId); }}
+        onSend={sendMessage}
+        onAttach={attachImage}
+        onRemoveAttachment={() => setAttachment(null)}
+      />
+    </ChatShell>
   );
 }

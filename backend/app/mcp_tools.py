@@ -1,33 +1,29 @@
+"""MCP tools exposed to the Hermes agent (mounted at ``/mcp`` inside Backend).
+
+Three data capabilities, no user context:
+- ``fetch_web_page`` — live MAI admission pages over HTTPS (SSRF-guarded);
+- ``search_synthetic_ege_results`` — the synthetic ФИС ГИА registry;
+- ``sql_query`` — read-only SQL access to the MAI data store
+  (knowledge_* official materials, synthetic_ege_* registry, campaign data).
+
+None of the tools is bound to a user profile: there are no user accounts in
+the system, and the trusted-context header is not sent to the MCP server.
+"""
+
 import ipaddress
 import re
 import socket
 from datetime import date
-from typing import Annotated
 from urllib.parse import urlsplit
 
 import httpx
 from fastapi.encoders import jsonable_encoder
-from fastmcp import Context, FastMCP
-from jwt import InvalidTokenError
-from pydantic import Field
-from sqlalchemy import text
+from fastmcp import FastMCP
+from sqlalchemy import select, text
 
-from app.admissions_schemas import (
-    ApplicationCreate, ApplicationStatus, ApplicationUpdate, CampaignYear, EgeInput,
-    StaffDocumentUpdate, StaffStatusUpdate,
-)
-from app.admissions_service import (
-    application_for,
-    bind_synthetic_results,
-    ege_response,
-    search_synthetic_candidates,
-)
-from app.knowledge_service import search_knowledge
-from app.mcp_service import get_authorized_user_for_mcp, mcp_operation
-from app.models import UserRole
+from app.db import SessionLocal
+from app.models import SyntheticEgeCandidate, SyntheticEgeResult
 from app.official_materials import extract_html_content
-from app.routers import admissions, applicants, knowledge
-from app.schemas import DocumentResponse, DocumentTypeUpdate, ProfileResponse, ProfileUpdate
 
 mcp = FastMCP("MAI-Agent tools")
 
@@ -37,243 +33,95 @@ _FETCH_MAX_BODY_BYTES = 2_000_000
 _FETCH_MAX_OUTPUT_CHARS = 25_000
 _FETCH_MAX_REDIRECTS = 5
 _FETCH_USER_AGENT = "Mozilla/5.0 (compatible; MAI-Agent/1.0)"
-_DOCUMENT_ROLES = (UserRole.applicant, UserRole.admissions_staff, UserRole.administrator)
-_STAFF_ROLES = (UserRole.admissions_staff, UserRole.administrator)
 
 
-@mcp.tool
-def get_authenticated_user(
-    context_token: str | None = None, context: Context | None = None
-) -> dict[str, str | int]:
-    """Return the minimum user identity authorized by Backend for this MCP call."""
-    try:
-        if context_token is None and context is not None:
-            request = context.request_context.request if context.request_context else None
-            if request is not None:
-                context_token = request.headers.get("x-mai-context")
-        if context_token is None:
-            raise ValueError("Missing trusted user context")
-        user, session_id = get_authorized_user_for_mcp(context_token)
-    except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
-        raise ValueError("Invalid trusted user context") from exc
-    return {"user_id": user.id, "role": user.role, "session_id": session_id}
+# ─────────────────────────────────────────────────────────────────────────────
+# Synthetic ФИС ГИА registry (test EGE data source)
+# ─────────────────────────────────────────────────────────────────────────────
 
 
-@mcp.tool
-def search_admissions_knowledge(query: str, limit: int = 5) -> list[dict[str, object]]:
-    """Search the admissions corpus and return relevant passages with source URLs and titles."""
-    request = knowledge.KnowledgeSearchRequest(query=query, limit=limit)
-    with mcp_operation() as (db, _):
-        return search_knowledge(db, request.query, min(request.limit, 20))
+def normalize_full_name(value: str) -> str:
+    return " ".join(value.split()).casefold()
 
 
-@mcp.tool
-def get_applicant_profile() -> dict[str, object]:
-    """Read the authenticated user's own admissions profile."""
-    with mcp_operation() as (db, actor):
-        profile = applicants.get_profile(current_user=actor, db=db)
-        return ProfileResponse.model_validate(profile).model_dump(mode="json")
+def alternate_full_name_order(value: str) -> str | None:
+    parts = value.split()
+    if len(parts) != 3:
+        return None
+    return " ".join((*parts[1:], parts[0]))
 
 
-@mcp.tool
-def update_applicant_profile(payload: ProfileUpdate) -> dict[str, object]:
-    """Save only explicitly supplied fields for the authenticated user's own profile."""
-    with mcp_operation() as (db, actor):
-        profile = applicants.update_profile(payload, current_user=actor, db=db)
-        return ProfileResponse.model_validate(profile).model_dump(mode="json")
+def search_synthetic_candidates(db, full_name: str, date_of_birth: date) -> dict[str, object]:
+    """Look the person up in the synthetic registry by full name + date of birth.
 
-
-@mcp.tool
-def list_applicant_documents() -> list[dict[str, object]]:
-    """List the authenticated user's uploaded documents and their processing statuses."""
-    with mcp_operation(*_DOCUMENT_ROLES) as (db, actor):
-        documents = applicants.list_documents(current_user=actor, db=db)
-        return [
-            DocumentResponse.model_validate(document).model_dump(
-                mode="json", exclude={"extracted_text", "analysis_json", "analysis_error"}
+    Names are compared ignoring case and extra whitespace, with an exact date
+    of birth; both surname-first and given-name-first orderings are accepted
+    for three-part names. All matching rows are reported (ambiguous match).
+    """
+    needle = normalize_full_name(full_name)
+    if not needle:
+        raise ValueError("Full name is required")
+    alternate = alternate_full_name_order(needle)
+    candidates = db.scalars(
+        select(SyntheticEgeCandidate).where(
+            SyntheticEgeCandidate.date_of_birth == date_of_birth
+        )
+    )
+    matched = []
+    for candidate in candidates:
+        name = normalize_full_name(candidate.full_name)
+        if name in (needle, alternate) or alternate_full_name_order(name) == needle:
+            matched.append(candidate)
+    matches = []
+    for item in sorted(matched, key=lambda candidate: candidate.candidate_id):
+        results = db.scalars(
+            select(SyntheticEgeResult)
+            .where(
+                SyntheticEgeResult.candidate_id == item.candidate_id,
+                SyntheticEgeResult.status == "valid",
             )
-            for document in documents
-        ]
-
-
-@mcp.tool
-def analyze_applicant_document(document_id: int) -> dict[str, object]:
-    """Analyze an existing document owned by the user. Analysis does not approve the document."""
-    with mcp_operation(*_DOCUMENT_ROLES) as (db, actor):
-        return applicants.analyze_uploaded_document(document_id, current_user=actor, db=db)
-
-
-@mcp.tool
-def update_applicant_document_type(document_id: int, payload: DocumentTypeUpdate) -> dict[str, object]:
-    """Set an existing owned document's type as explicitly requested by the applicant."""
-    with mcp_operation(*_DOCUMENT_ROLES) as (db, actor):
-        document = applicants.update_document_type(document_id, payload, current_user=actor, db=db)
-        return {"id": document.id, "document_type": document.document_type, "status": document.status}
-
-
-@mcp.tool
-def check_applicant_documents() -> dict[str, object]:
-    """Check the user's documents against the applicable profile requirements."""
-    with mcp_operation(*_DOCUMENT_ROLES) as (db, actor):
-        return applicants.document_completeness(current_user=actor, db=db)
-
-
-@mcp.tool
-def get_admission_document_rules(
-    target_program: str | None = None, admission_basis: str | None = None
-) -> list[dict[str, object]]:
-    """Read general and matching document requirements. Pass a program and basis when known."""
-    with mcp_operation() as (db, _):
-        return knowledge.list_admission_requirements(target_program, admission_basis, db)
-
-
-@mcp.tool
-def list_admission_rule_sets(campaign_year: CampaignYear | None = None) -> list[dict[str, object]]:
-    """Read configured and versioned admission rules, optionally for a selected year."""
-    with mcp_operation() as (db, actor):
-        return jsonable_encoder(admissions.list_admission_rules(actor, db, campaign_year=campaign_year))
-
-
-@mcp.tool
-def list_applicant_applications() -> list[dict[str, object]]:
-    """List applications and their current states for the authenticated applicant."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.list_applications(actor, db))
-
-
-@mcp.tool
-def create_applicant_application(payload: ApplicationCreate) -> dict[str, object]:
-    """Create a draft application after the applicant explicitly asks to create it."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.create_application(payload, actor, db))
-
-
-@mcp.tool
-def update_applicant_application(application_id: int, payload: ApplicationUpdate) -> dict[str, object]:
-    """Update explicitly supplied fields of the applicant's own editable application."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.update_application(application_id, payload, actor, db))
-
-
-@mcp.tool
-def check_application_requirements(application_id: int) -> dict[str, object]:
-    """Check the applicant's own application against configured document and score requirements."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.get_application_requirements(application_id, actor, db))
-
-
-@mcp.tool
-def submit_applicant_application(application_id: int) -> dict[str, object]:
-    """Submit the applicant's own application for review after explicit confirmation."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.submit_application(application_id, actor, db))
-
-
-@mcp.tool
-def get_application_ege_scores(application_id: int) -> dict[str, object]:
-    """Get the applicant's declared EGE scores and their latest synthetic comparison result."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.get_application_ege(application_id, actor, db))
-
-
-@mcp.tool
-def update_application_ege_scores(application_id: int, payload: EgeInput) -> dict[str, object]:
-    """Replace a draft's declared EGE scores with the explicitly confirmed complete list."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.put_application_ege(application_id, payload, actor, db))
-
-
-@mcp.tool
-def verify_application_synthetic_ege(application_id: int) -> dict[str, object]:
-    """Compare declared EGE scores against the synthetic test registry and return the recorded result."""
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        return jsonable_encoder(admissions.verify_application_ege(application_id, actor, db))
+            .order_by(SyntheticEgeResult.subject, SyntheticEgeResult.year.desc())
+        )
+        matches.append(
+            {
+                "candidate_id": item.candidate_id,
+                "full_name": item.full_name,
+                "date_of_birth": item.date_of_birth,
+                "results": [
+                    {"subject": row.subject, "year": row.year, "score": row.score}
+                    for row in results
+                ],
+            }
+        )
+    return {
+        "match_count": len(matches),
+        "ambiguous": len(matches) > 1,
+        "matches": matches,
+    }
 
 
 @mcp.tool
 def search_synthetic_ege_results(full_name: str, date_of_birth: date) -> dict[str, object]:
-    """Search the synthetic test EGE registry by full name and date of birth.
+    """Search the synthetic test EGE registry (imitation of ФИС ГИА) by full name and date of birth.
 
-    Use it when the applicant wants to apply and has given their full name
-    (surname, first name, patronymic) and date of birth (YYYY-MM-DD).
+    Use it when the person gives their full name (surname, first name,
+    patronymic) and date of birth (YYYY-MM-DD).
 
     Returns match_count and the matches (subject, year, score per result):
-    - match_count == 1: present the found results to the user and ask them
-      to confirm that these are their results. After an explicit user
-      confirmation call confirm_synthetic_ege_results with the returned
-      candidate_id and the application id.
+    - match_count == 1: present the found results to the user.
     - match_count == 0: tell the user that no record was found and suggest
       checking the full name and date of birth. Do not guess a person.
     - match_count > 1 (ambiguous): tell the user that several records share
-      the same full name and date of birth and that automatic binding is
-      forbidden in this case. Do not offer the user a choice between the
-      records and do not call confirm_synthetic_ege_results. Suggest that
-      the user clarifies the data with the admissions committee.
+      the same full name and date of birth. Do not offer a choice between
+      records automatically.
     """
-    with mcp_operation(UserRole.applicant) as (db, _):
-        return jsonable_encoder(
-            search_synthetic_candidates(db, full_name=full_name, date_of_birth=date_of_birth)
-        )
+    with SessionLocal() as db:
+        return jsonable_encoder(search_synthetic_candidates(db, full_name, date_of_birth))
 
 
-@mcp.tool
-def confirm_synthetic_ege_results(application_id: int, candidate_id: str) -> dict[str, object]:
-    """Bind the confirmed synthetic EGE results to the applicant's draft application.
-
-    Call it only after the user explicitly confirmed that the presented
-    results (from search_synthetic_ege_results) are theirs. Scores are copied
-    from the registry as-is; this tool cannot alter the registry.
-    """
-    with mcp_operation(UserRole.applicant) as (db, actor):
-        application = application_for(db, application_id, applicant_id=actor.id, lock=True)
-        bind_synthetic_results(db, application, candidate_id)
-        db.commit()
-        return jsonable_encoder(ege_response(db, application))
-
-
-@mcp.tool
-def list_staff_admission_applications(
-    status: ApplicationStatus | None = None,
-    applicant_id: Annotated[int, Field(gt=0)] | None = None,
-    query: Annotated[str, Field(max_length=255)] | None = None,
-    limit: Annotated[int, Field(ge=1, le=100)] = 25,
-    offset: Annotated[int, Field(ge=0)] = 0,
-) -> list[dict[str, object]]:
-    """List admissions applications with filters for authorized admissions staff."""
-    with mcp_operation(*_STAFF_ROLES) as (db, actor):
-        return jsonable_encoder(admissions.list_staff_applications(
-            actor, db, status=status, applicant_id=applicant_id, q=query, limit=limit, offset=offset,
-        ))
-
-
-@mcp.tool
-def get_staff_admission_application(application_id: int) -> dict[str, object]:
-    """Show application details and review history for authorized admissions staff."""
-    with mcp_operation(*_STAFF_ROLES) as (db, actor):
-        details = admissions.get_staff_application(application_id, actor, db)
-        return details.model_dump(
-            mode="json",
-            exclude={"documents": {"__all__": {"extracted_text", "analysis_json", "analysis_error"}}},
-        )
-
-
-@mcp.tool
-def update_staff_admission_application(
-    application_id: int, payload: StaffStatusUpdate,
-) -> dict[str, object]:
-    """Record a permitted status change explicitly requested by an authorized staff member."""
-    with mcp_operation(*_STAFF_ROLES) as (db, actor):
-        return jsonable_encoder(admissions.update_staff_application(application_id, payload, actor, db))
-
-
-@mcp.tool
-def review_staff_admission_document(
-    application_id: int, document_id: int, payload: StaffDocumentUpdate,
-) -> dict[str, object]:
-    """Save a staff member's explicit document review decision for an application under review."""
-    with mcp_operation(*_STAFF_ROLES) as (db, actor):
-        document = admissions.review_staff_document(application_id, document_id, payload, actor, db)
-        return {"id": document.id, "status": document.status, "review_message": document.review_message}
+# ─────────────────────────────────────────────────────────────────────────────
+# Live MAI admission pages
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 def _assert_public_host(hostname: str) -> None:
@@ -381,8 +229,6 @@ def fetch_web_page(url: str, section_query: str | None = None) -> str:
 # SQL tool: read-only access to the MAI data store (second external data source)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Tables that hold personal account data / secrets: never exposed to the agent.
-_SQL_FORBIDDEN_TABLES = {"users", "staff_invites"}
 _SQL_READONLY_RE = re.compile(r"^\s*(select|with)\b", re.IGNORECASE)
 _SQL_TABLE_REF_RE = re.compile(r"\b(?:from|join)\s+[`\"']?(\w+)", re.IGNORECASE)
 _SQL_MAX_ROWS = 500
@@ -397,9 +243,6 @@ def _validate_readonly_sql(sql: str) -> str:
         raise ValueError("Only a single SQL statement is allowed")
     if not _SQL_READONLY_RE.match(statement):
         raise ValueError("Only SELECT or WITH ... SELECT statements are allowed")
-    for match in _SQL_TABLE_REF_RE.finditer(statement):
-        if match.group(1).lower() in _SQL_FORBIDDEN_TABLES:
-            raise ValueError(f"Access to table '{match.group(1)}' is not allowed")
     return statement
 
 
@@ -427,21 +270,18 @@ def sql_query(sql: str, limit: int = 100) -> dict[str, object]:
 
     Available data:
     - knowledge_sources / knowledge_chunks — official admission materials
-      (text, url, published date);
+      (title, url, content);
     - synthetic_ege_candidates / synthetic_ege_results — the synthetic
-      ФИС ГИА registry (people, subjects, scores);
-    - applications / applicant_profiles / admission_rule_sets /
-      admission_requirements — admissions campaign data.
+      ФИС ГИА registry (people, subjects, scores).
 
     Only a single SELECT or WITH ... SELECT statement is allowed (no INSERT,
-    UPDATE, DELETE, DDL, no multiple statements). Account tables (users,
-    staff_invites) are not accessible. Results are returned as JSON with
-    column names and rows (capped at 500 rows).
+    UPDATE, DELETE, DDL, no multiple statements). Results are returned as
+    JSON with column names and rows (capped at 500 rows).
 
     Args:
         sql: the SELECT statement to execute.
         limit: maximum number of rows to return (default 100, max 500).
     """
     statement = _validate_readonly_sql(sql)
-    with mcp_operation() as (db, _user):
+    with SessionLocal() as db:
         return run_readonly_sql(db, statement, limit)

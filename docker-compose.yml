@@ -21,7 +21,6 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mai_agent}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-mai_agent}
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change_me_in_local_environment}
       ACP_TRANSPORT: ${ACP_TRANSPORT:-stdio}
       HERMES_COMMAND: ${HERMES_COMMAND:-hermes-acp}
       HERMES_CWD: ${HERMES_CWD:-/app}
@@ -32,20 +31,12 @@ services:
       MCP_PUBLIC_URL: ${MCP_PUBLIC_URL:-http://backend:8000/mcp}
       LLM_BASE_URL: ${LLM_BASE_URL:-${QWEN_BASE_URL:-https://api-ai.mai.ru/v1}}
       LLM_API_KEY: ${LLM_API_KEY:-${QWEN_API_KEY:-}}
-      DOCUMENT_MODEL: ${DOCUMENT_MODEL:-${QWEN_MODEL:-deepseek-v4.1-flash}}
-      AI_API_CA_BUNDLE: ${AI_API_CA_BUNDLE:-}
       OPENAI_API_KEY: ${LLM_API_KEY:-${QWEN_API_KEY:-}}
       HERMES_MODEL: ${HERMES_MODEL:-${QWEN_MODEL:-deepseek-v4.1-flash}}
       HERMES_BASE_URL: ${HERMES_BASE_URL:-${LLM_BASE_URL:-${QWEN_BASE_URL:-https://api-ai.mai.ru/v1}}}
       HERMES_REASONING_EFFORT: ${HERMES_REASONING_EFFORT:-low}
       SSL_CERT_FILE: ${AI_API_CA_BUNDLE:-}
       REQUESTS_CA_BUNDLE: ${AI_API_CA_BUNDLE:-}
-      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
-      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
-      EMBEDDING_DIMENSIONS: ${EMBEDDING_DIMENSIONS:-1024}
-      OFFICIAL_SOURCE_DOMAINS: ${OFFICIAL_SOURCE_DOMAINS:-mai.ru,priem.mai.ru}
-      OFFICIAL_SOURCE_ROOT_URLS: ${OFFICIAL_SOURCE_ROOT_URLS:-https://mai.ru,https://priem.mai.ru}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_POLLING_TIMEOUT_SECONDS: ${TELEGRAM_POLLING_TIMEOUT_SECONDS:-10}
       # Hermes' tirith security scanner auto-downloads a binary from GitHub on
@@ -62,6 +53,9 @@ services:
       - "8000:8000"
     volumes:
       - ./certs:/app/certs:ro
+      # Hermes session store (state.db) + MEMORY.md: must survive container
+      # recreation so agent sessions and long-term memory persist.
+      - hermes_home:/root/.hermes
     depends_on:
       postgres:
         condition: service_healthy
@@ -77,3 +71,4 @@ services:
 
 volumes:
   postgres_data:
+  hermes_home:

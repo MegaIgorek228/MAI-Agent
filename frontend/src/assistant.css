@@ -580,3 +580,27 @@
 @media (prefers-reduced-motion: reduce) {
   .assistant-thinking-mark { animation: none; }
 }
+
+.assistant-session-row {
+  display: flex;
+  align-items: center;
+  gap: .15rem;
+}
+
+.assistant-session-row .assistant-session {
+  flex: 1;
+}
+
+.assistant-session-delete {
+  flex: 0 0 auto;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin-right: .25rem;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+
+.assistant-session-row:hover .assistant-session-delete,
+.assistant-session-delete:focus-visible {
+  opacity: 1;
+}

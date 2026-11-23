@@ -1,5 +1,16 @@
+"""Hermes ACP client: a pool of agent processes keyed by app session.
+
+There are no user accounts in MAI-Agent: the unit of context is the app
+session id (a UUID string). Each app session maps to one Hermes session
+(``hermes_session_id``); the conversation transcript and agent memory live
+in Hermes' own session store (``state.db``). A stored session is restored
+with ACP ``session/load``, which per the ACP spec replays the prior
+transcript back to the client as ``session_update`` notifications — the
+backend captures that replay as its history source instead of duplicating
+the transcript in its own database.
+"""
+
 import asyncio
-import json
 import logging
 import os
 import shlex
@@ -14,21 +25,24 @@ from acp.schema import (
     AgentMessageChunk,
     ClientCapabilities,
     Implementation,
-    HttpHeader,
     HttpMcpServer,
     RequestPermissionResponse,
     ImageContentBlock,
     TextContentBlock,
+    UserMessageChunk,
 )
 
 from app.config import get_settings
-from app.security import create_trusted_context
 
 logger = logging.getLogger(__name__)
 
 
 class HermesUnavailableError(RuntimeError):
     """Raised when the configured Hermes ACP process cannot be used."""
+
+
+class HermesSessionLoadError(HermesUnavailableError):
+    """The agent explicitly rejected loading a stored session."""
 
 
 #: Instruction prepended to the ACP prompt when an image is attached.
@@ -47,10 +61,33 @@ def with_image_instruction(text: str) -> str:
 
 
 class HermesCallbacks(Client):
+    """ACP client callbacks.
+
+    During a prompt turn, assistant text chunks of the current turn are
+    collected into ``messages``. While a stored session is being loaded
+    (``replaying`` flag), the spec-mandated history replay is collected into
+    ``replay`` as merged user/assistant messages — that is the backend's
+    history source (Hermes is the single owner of the transcript).
+    """
+
     def __init__(self) -> None:
         self.messages: list[str] = []
+        self.replay: list[dict[str, str]] = []
+        self.replaying = False
+
+    def _append_replay(self, role: str, delta: str) -> None:
+        if self.replay and self.replay[-1]["role"] == role:
+            self.replay[-1]["content"] += delta
+        else:
+            self.replay.append({"role": role, "content": delta})
 
     async def session_update(self, session_id: str, update: Any, **kwargs: Any) -> None:
+        if self.replaying:
+            if isinstance(update, UserMessageChunk) and isinstance(update.content, TextContentBlock):
+                self._append_replay("user", update.content.text)
+            elif isinstance(update, AgentMessageChunk) and isinstance(update.content, TextContentBlock):
+                self._append_replay("assistant", update.content.text)
+            return
         if isinstance(update, AgentMessageChunk) and isinstance(update.content, TextContentBlock):
             self.messages.append(update.content.text)
 
@@ -71,7 +108,9 @@ class HermesProcess:
     callbacks: HermesCallbacks
     session_id: str
     last_used: float = field(default_factory=monotonic)
-    restore_history: bool = False
+    #: Transcript for UI history: seeded from the session/load replay and
+    #: appended to after each prompt turn.
+    history: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -80,18 +119,14 @@ class SessionLock:
     users: int = 0
 
 
-class HermesSessionLoadError(HermesUnavailableError):
-    """The agent explicitly rejected loading a stored session."""
-
-
 class HermesClientManager:
     def __init__(self) -> None:
-        self._processes: dict[int, HermesProcess] = {}
-        self._locks: dict[int, SessionLock] = {}
+        self._processes: dict[str, HermesProcess] = {}
+        self._locks: dict[str, SessionLock] = {}
         self._starting = 0
 
     @asynccontextmanager
-    async def _session(self, session_id: int):
+    async def _session(self, session_id: str):
         entry = self._locks.setdefault(session_id, SessionLock())
         entry.users += 1
         try:
@@ -116,9 +151,7 @@ class HermesClientManager:
                     process.kill()
                 await process.wait()
 
-    async def _start(
-        self, user_id: int, app_session_id: int, hermes_session_id: str | None
-    ) -> HermesProcess:
+    async def _start(self, session_id: str, hermes_session_id: str | None) -> HermesProcess:
         settings = get_settings()
         if settings.acp_transport != "stdio":
             raise HermesUnavailableError("Only ACP stdio transport is supported")
@@ -163,11 +196,12 @@ class HermesClientManager:
                 ),
                 timeout=timeout,
             )
-            trusted_context = create_trusted_context_for_session(user_id, app_session_id)
+            # The MCP server is exposed without any user context header:
+            # MCP/SQL data sources are not bound to profiles.
             mcp_server = HttpMcpServer(
                 name="mai-agent",
                 url=settings.mcp_public_url,
-                headers=[HttpHeader(name="X-MAI-Context", value=trusted_context)],
+                headers=[],
                 type="http",
             )
             if hermes_session_id is None:
@@ -176,23 +210,31 @@ class HermesClientManager:
                     timeout=timeout,
                 )
                 hermes_session_id = session.session_id
+                history: list[dict[str, str]] = []
             else:
                 try:
-                    loaded = await asyncio.wait_for(
-                        connection.load_session(
-                            cwd=str(cwd),
-                            session_id=hermes_session_id,
-                            mcp_servers=[mcp_server],
-                        ),
-                        timeout=timeout,
-                    )
+                    callbacks.replaying = True
+                    try:
+                        loaded = await asyncio.wait_for(
+                            connection.load_session(
+                                cwd=str(cwd),
+                                session_id=hermes_session_id,
+                                mcp_servers=[mcp_server],
+                            ),
+                            timeout=timeout,
+                        )
+                    finally:
+                        callbacks.replaying = False
                 except RequestError as exc:
                     raise HermesSessionLoadError("Hermes rejected the stored session") from exc
                 # Hermes returns null for a missing session. ACP SDK 0.9
                 # converts it into an empty LoadSessionResponse.
                 if loaded is None or not loaded.model_fields_set:
                     raise HermesSessionLoadError("Hermes no longer has the stored session")
-            return HermesProcess(process, connection, callbacks, hermes_session_id)
+                history = list(callbacks.replay)
+            return HermesProcess(
+                process, connection, callbacks, hermes_session_id, history=history
+            )
         except (HermesUnavailableError, asyncio.CancelledError):
             await self._stop_process(process, connection)
             raise
@@ -204,45 +246,43 @@ class HermesClientManager:
             )
             raise HermesUnavailableError(detail) from exc
 
-    async def _open(self, user_id: int, app_session_id: int, previous_id: str | None) -> HermesProcess:
-        entry = self._processes.get(app_session_id)
+    async def _open(self, session_id: str, previous_id: str | None) -> HermesProcess:
+        entry = self._processes.get(session_id)
         if entry is not None and entry.process.returncode is None:
             return entry
-        await self._close_unlocked(app_session_id)
+        await self._close_unlocked(session_id)
         await self.close_idle()
         if len(self._processes) + self._starting >= get_settings().hermes_max_processes:
             raise HermesUnavailableError("Hermes is busy. Please retry.")
         self._starting += 1
         try:
             try:
-                entry = await self._start(user_id, app_session_id, previous_id)
+                entry = await self._start(session_id, previous_id)
             except HermesSessionLoadError:
-                logger.info("Opening a fresh Hermes session for app session %s", app_session_id)
-                entry = await self._start(user_id, app_session_id, None)
-                entry.restore_history = True
-            self._processes[app_session_id] = entry
+                # Hermes lost the stored session (e.g. its state store was
+                # reset): start fresh; long-term MEMORY.md survives in the
+                # profile, the transcript does not.
+                logger.info("Opening a fresh Hermes session for app session %s", session_id)
+                entry = await self._start(session_id, None)
+            self._processes[session_id] = entry
             return entry
         finally:
             self._starting -= 1
 
-    async def start_session(self, user_id: int, app_session_id: int) -> str:
-        async with self._session(app_session_id):
-            return (await self._open(user_id, app_session_id, None)).session_id
+    async def start_session(self, session_id: str) -> str:
+        async with self._session(session_id):
+            return (await self._open(session_id, None)).session_id
 
     async def prompt(
         self,
-        user_id: int,
-        app_session_id: int,
+        session_id: str,
         hermes_session_id: str,
         text: str,
         content_blocks: dict[str, str] | None = None,
     ) -> tuple[str, str]:
-        async with self._session(app_session_id):
-            entry = await self._open(user_id, app_session_id, hermes_session_id)
+        async with self._session(session_id):
+            entry = await self._open(session_id, hermes_session_id)
             entry.callbacks.messages.clear()
-            if entry.restore_history:
-                text = await asyncio.to_thread(_with_conversation_history, user_id, app_session_id, text)
-                entry.restore_history = False
             prompt_blocks: list[Any] = [TextContentBlock(type="text", text=text)]
             if content_blocks is not None:
                 prompt_blocks.append(
@@ -258,10 +298,10 @@ class HermesClientManager:
                     timeout=get_settings().acp_prompt_timeout_seconds,
                 )
             except asyncio.CancelledError:
-                await self._close_unlocked(app_session_id)
+                await self._close_unlocked(session_id)
                 raise
             except Exception as exc:
-                await self._close_unlocked(app_session_id)
+                await self._close_unlocked(session_id)
                 detail = (
                     "Hermes ACP prompt timed out"
                     if isinstance(exc, TimeoutError) else "Hermes ACP prompt failed"
@@ -273,12 +313,34 @@ class HermesClientManager:
                 raise HermesUnavailableError("Hermes ACP prompt was cancelled")
             if response.stop_reason not in ("end_turn", "max_tokens"):
                 logger.warning("Hermes ACP prompt stop_reason=%s", response.stop_reason)
+            answer = "".join(entry.callbacks.messages).strip()
+            if answer:
+                entry.history.append({"role": "user", "content": text})
+                entry.history.append({"role": "assistant", "content": answer})
             # An empty turn can still have invoked tools. Let the caller show
             # the failure instead of automatically repeating the action.
-            return "".join(entry.callbacks.messages).strip(), entry.session_id
+            return answer, entry.session_id
 
-    async def _close_unlocked(self, app_session_id: int) -> None:
-        entry = self._processes.pop(app_session_id, None)
+    async def history(self, session_id: str, hermes_session_id: str | None) -> list[dict[str, str]]:
+        """Return the session transcript as captured from Hermes.
+
+        Served from the warm process cache when one exists; otherwise the
+        stored session is loaded (ACP replay) and the captured transcript
+        returned.
+        """
+        if hermes_session_id is None:
+            return []
+        async with self._session(session_id):
+            entry = await self._open(session_id, hermes_session_id)
+            return [dict(item) for item in entry.history]
+
+    async def close_session(self, session_id: str) -> None:
+        """Terminate the live Hermes process for a session (if any)."""
+        async with self._session(session_id):
+            await self._close_unlocked(session_id)
+
+    async def _close_unlocked(self, session_id: str) -> None:
+        entry = self._processes.pop(session_id, None)
         if entry is not None:
             await self._stop_process(entry.process, entry.connection)
 
@@ -300,50 +362,6 @@ class HermesClientManager:
         for session_id in list(self._processes):
             async with self._session(session_id):
                 await self._close_unlocked(session_id)
-
-
-def _with_conversation_history(user_id: int, app_session_id: int, text: str) -> str:
-    """Give a replacement ACP session the previous answered turns as context."""
-    from sqlalchemy import select
-
-    from app.db import SessionLocal
-    from app.models import ChatMessage, ChatSession
-
-    with SessionLocal() as db:
-        rows = list(db.execute(
-            select(ChatMessage.role, ChatMessage.content)
-            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
-            .where(ChatSession.id == app_session_id, ChatSession.user_id == user_id)
-            .order_by(ChatMessage.id.desc())
-            .limit(20)
-        ))
-    last_answer = next((index for index, row in enumerate(rows) if row.role == "assistant"), None)
-    if last_answer is None:
-        return text
-    history = [
-        {"role": row.role, "text": row.content[:1500]}
-        for row in reversed(rows[last_answer:])
-    ]
-    return (
-        "Контекст предыдущих сообщений (история для справки):\n"
-        + json.dumps(history, ensure_ascii=False)
-        + "\n\nТекущее сообщение пользователя:\n"
-        + text
-    )
-
-
-def create_trusted_context_for_session(user_id: int, app_session_id: int) -> str:
-    from app.db import SessionLocal
-    from app.models import User
-
-    db = SessionLocal()
-    try:
-        user = db.get(User, user_id)
-        if user is None:
-            raise HermesUnavailableError("User no longer exists")
-        return create_trusted_context(user, str(app_session_id), ttl_seconds=3600)
-    finally:
-        db.close()
 
 
 hermes_manager = HermesClientManager()

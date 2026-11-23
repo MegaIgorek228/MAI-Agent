@@ -52,14 +52,14 @@ cp .env.example .env
 |---|---|---|
 | `LLM_API_KEY` | вставить ключ MAI API (`api-ai.mai.ru`) | чат с ассистентом и анализ документов; без него приложение поднимется, но ИИ-функции не будут работать |
 | `POSTGRES_PASSWORD` | задать своё случайное URL-безопасное значение | пароль БД подставляется в строку подключения (по умолчанию `change_me`) |
-| `JWT_SECRET_KEY` | задать своё длинное случайное значение | подпись JWT-токенов; при смене все сессии сбрасываются |
+
+Авторизации нет (sessionless-архитектура): `JWT_SECRET_KEY` больше не требуется.
 
 Опциональные:
 
 - `TELEGRAM_BOT_TOKEN` — токен бота; polling выполняется **только** Backend (в Hermes Telegram-канал отключён). Пустое значение — Telegram просто не стартует.
 - `AI_API_CA_BUNDLE` — путь к CA-цепочке внутри контейнера, если `api-ai.mai.ru` использует внутренний сертификат: `AI_API_CA_BUNDLE=/app/certs/mai-api-ca-chain.pem`. В каталоге `certs/` (монтируется в `/app/certs`) уже лежит готовая цепочка; в публичных сетях обычно достаточно оставить пустым.
-- `EMBEDDING_BASE_URL` / `EMBEDDING_API_KEY` — включение векторного поиска по базе знаний (без них работает лексический поиск).
-- `HERMES_MODEL`, `DOCUMENT_MODEL` — по умолчанию `deepseek-v4.1-flash`; `HERMES_REASONING_EFFORT=low`.
+- `HERMES_MODEL` — по умолчанию `deepseek-v4.1-flash`; `HERMES_REASONING_EFFORT=low`.
 
 Пример минимального `.env`:
 
@@ -68,11 +68,9 @@ APP_ENV=development
 POSTGRES_DB=mai_agent
 POSTGRES_USER=mai_agent
 POSTGRES_PASSWORD=<свой-пароль>
-JWT_SECRET_KEY=<своё-длинное-случайное>
 LLM_BASE_URL=https://api-ai.mai.ru/v1
 LLM_API_KEY=<ключ MAI API>
 HERMES_MODEL=deepseek-v4.1-flash
-DOCUMENT_MODEL=deepseek-v4.1-flash
 HERMES_BASE_URL=https://api-ai.mai.ru/v1
 HERMES_REASONING_EFFORT=low
 TELEGRAM_BOT_TOKEN=

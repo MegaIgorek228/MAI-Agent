@@ -1,5 +1,50 @@
 # MAI-Agent — статус реализации
 
+## Sessionless-версия (концепция 2026-11-23, ветка `simplification/minimal-agent`)
+
+Актуальность: 2026-11-23 (обновление). Пользовательских аккаунтов, профилей,
+ролей и JWT больше нет: единственная единица пользовательского контекста —
+**сессия Hermes** (`agent_sessions` → `hermes_session_id`). Подробно — в
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) и [AGENTS.md](AGENTS.md).
+
+Готово и проверено (2026-11-23):
+
+1. **Бэкенд переписан на sessionless**: `models.py` (5 моделей: AgentSession,
+   SyntheticEgeCandidate/Result, KnowledgeSource/Chunks), `config.py` (без JWT),
+   `hermes_client.py` (пул ACP-процессов на сессию, восстановление через
+   `session/load`, прозрачный fallback при потере сессии), `routers/chat.py`
+   (без авторизации: POST/GET/DELETE `/chat/sessions*`), `telegram_service.py`
+   (chat id ⇄ `agent_sessions.external_id`), `main.py` (`/health`, `/ready`,
+   `/chat`, `/mcp`). Legacy-модули (users/roles/invites/applications/documents)
+   удалены из кода.
+2. **Миграция `0013_sessionless_agents`**: таблица `agent_sessions`; удаление
+   legacy-таблиц (в порядке FK-зависимостей); downgrade намеренно не
+   реализован — откат только из резервной копии
+   (`mai_agent_pre_sessionless_20261123_1217.sql`).
+3. **MCP — 3 контекстно-чистых инструмента** (`mcp_tools.py`):
+   `fetch_web_page` (HTTPS, SSRF-защита), `search_synthetic_ege_results`
+   (имитация ФИС ГИА), `sql_query` (read-only, 500 строк). Заголовков
+   авторизации нет.
+4. **Фронтенд — чат без регистрации**: `App.tsx` (список UUID-сессий в
+   `localStorage`, автосоздание, восстановление, удаление),
+   `AssistantWorkspace.tsx` (история, переключение, изображения base64),
+   `Portal.tsx` → `ChatShell`. Файлы кабинетов и «самолёта» удалены.
+5. **Hermes-хранилище вынесено в volume `hermes_home`** (`/root/.hermes`):
+   сессии, история и MEMORY.md переживают пересоздание контейнера.
+6. **Тесты 30/30** (`python -m pytest ../tests -q` из `backend/`): SQL-инструмент,
+   сессии (создание/история/изоляция/повторное открытие при потере сессии),
+   Telegram-маппинг, жизненный цикл Hermes, реестр ФИС.
+7. **E2E 20/20** (`scripts/e2e_minimal_agent.py`, запущенный стек): создание
+   сессии без авторизации, сообщение/ответ, история из Hermes, продолжение
+   контекста, изображение (vision), файл, терминал, SQL, имитация ФИС ГИА,
+   видимость штатных инструментов, изоляция двух сессий, маппинг Telegram.
+8. **Восстановление после перезапуска Backend проверено live**: после
+   `docker compose restart backend` история сессии (16 сообщений) восстановлена
+   из `state.db` через ACP `session/load`; после перезагрузки Web-страницы
+   история восстанавливается из хранилища Hermes.
+
+Ниже — отчёт о первом этапе упрощения (до sessionless), сохранён для справки.
+
 ## Минимальная агентная версия (концепция 2026-11-23, ветка `simplification/minimal-agent`)
 
 Актуальность: 2026-11-23. Текущая целевая архитектура: Hermes Agent — единственный
