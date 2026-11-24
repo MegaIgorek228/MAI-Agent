@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     app_name: str = "MAI-Agent Backend"
     app_env: str = "development"
     database_url: str = Field(
-        default="postgresql+psycopg://mai_agent:change_me@localhost:5432/mai_agent"
+        default="postgresql+psycopg://mai_agent:***@localhost:5432/mai_backend"
     )
     acp_transport: str = "stdio"
     hermes_command: str = "hermes-acp"
@@ -38,6 +38,15 @@ class Settings(BaseSettings):
     official_source_root_urls: str = "https://mai.ru,https://priem.mai.ru"
     telegram_bot_token: str | None = None
     telegram_polling_timeout_seconds: int = 10
+    # Data architecture: three independent databases on the same Postgres
+    # server. The Backend service DB (database_url above) stores only
+    # operational data (agent_sessions, telegram_checkpoints). The agent's
+    # own database (applicants, applications, ege_scores, ratings,
+    # knowledge_*) is reachable through the sql_query MCP tool, and the
+    # synthetic ФИС ГИА database (EGE results source) through the ФИС MCP
+    # tools. The names below are swapped into the database_url path.
+    own_db_name: str = "mai_agent"
+    fis_db_name: str = "mai_fis_gia"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

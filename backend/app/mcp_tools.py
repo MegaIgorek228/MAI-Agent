@@ -1,12 +1,19 @@
 """MCP tools exposed to the Hermes agent (mounted at ``/mcp`` inside Backend).
 
-Three data capabilities, no user context:
-- ``fetch_web_page`` — live MAI admission pages over HTTPS (SSRF-guarded);
-- ``search_synthetic_ege_results`` — the synthetic ФИС ГИА registry;
-- ``sql_query`` — SQL access to the MAI data store (knowledge_* official
-  materials, synthetic_ege_* registry, campaign data). The demo version
-  intentionally leaves SQL open: any single PostgreSQL statement
-  (SELECT, INSERT, UPDATE, DELETE, DDL) is allowed.
+Three data capabilities, no user context, mapped to the three-database
+architecture:
+- ФИС ГИА (synthetic EGE results source, ``mai_fis_gia`` DB) — read-only:
+  ``search_synthetic_ege_results`` (full name + date of birth),
+  ``list_synthetic_ege_candidates`` and ``get_synthetic_ege_results``
+  (browse the registry by candidate id);
+- the agent's own database (``mai_agent`` DB) — ``sql_query``: open SQL
+  access to applicants, applications, ege_scores, ratings, knowledge_*;
+- the internet — ``fetch_web_page``: live MAI admission pages over HTTPS
+  (SSRF-guarded); the agent may also use its native terminal/curl/Python
+  tools for web work.
+
+The Backend service database (agent_sessions, telegram_checkpoints) is NOT
+reachable from any tool below.
 
 None of the tools is bound to a user profile: there are no user accounts in
 the system, and the trusted-context header is not sent to the MCP server.
@@ -20,9 +27,9 @@ from urllib.parse import urlsplit
 import httpx
 from fastapi.encoders import jsonable_encoder
 from fastmcp import FastMCP
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
-from app.db import SessionLocal
+from app.db import FisSessionLocal, OwnSessionLocal
 from app.models import SyntheticEgeCandidate, SyntheticEgeResult
 from app.official_materials import extract_html_content
 
@@ -37,7 +44,9 @@ _FETCH_USER_AGENT = "Mozilla/5.0 (compatible; MAI-Agent/1.0)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Synthetic ФИС ГИА registry (test EGE data source)
+# Synthetic ФИС ГИА registry (test EGE data source) — mai_fis_gia database
+# Read-only from the agent's side: data flows FROM ФИС into the agent's own
+# database, never the other way round.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -116,8 +125,84 @@ def search_synthetic_ege_results(full_name: str, date_of_birth: date) -> dict[st
       the same full name and date of birth. Do not offer a choice between
       records automatically.
     """
-    with SessionLocal() as db:
+    with FisSessionLocal() as db:
         return jsonable_encoder(search_synthetic_candidates(db, full_name, date_of_birth))
+
+
+@mcp.tool
+def list_synthetic_ege_candidates(limit: int = 100, offset: int = 0) -> dict[str, object]:
+    """List people from the synthetic ФИС ГИА registry (ordered by candidate_id).
+
+    Use it to browse the registry when the person is unknown or to enumerate
+    candidates before transferring their data into the own database via
+    sql_query.
+
+    Args:
+        limit: maximum number of candidates per page (default 100, max 500).
+        offset: zero-based offset of the first candidate of the page.
+    """
+    rows_limit = max(1, min(int(limit or 100), 500))
+    with FisSessionLocal() as db:
+        total_count = db.scalar(select(func.count(SyntheticEgeCandidate.candidate_id)))
+        rows = db.scalars(
+            select(SyntheticEgeCandidate)
+            .order_by(SyntheticEgeCandidate.candidate_id)
+            .limit(rows_limit)
+            .offset(max(0, int(offset or 0)))
+        )
+        return jsonable_encoder(
+            {
+                "total": int(total_count or 0),
+                "limit": rows_limit,
+                "offset": max(0, int(offset or 0)),
+                "candidates": [
+                    {
+                        "candidate_id": c.candidate_id,
+                        "full_name": c.full_name,
+                        "date_of_birth": c.date_of_birth,
+                    }
+                    for c in rows
+                ],
+            }
+        )
+
+
+@mcp.tool
+def get_synthetic_ege_results(candidate_id: str) -> dict[str, object]:
+    """Get all valid ЕGE results of one synthetic ФИС ГИА candidate by id.
+
+    Use it together with list_synthetic_ege_candidates to read a person's
+    results (candidate_id looks like SYN-1001).
+
+    Args:
+        candidate_id: the registry id of the person.
+    """
+    candidate_id = (candidate_id or "").strip()
+    if not candidate_id:
+        raise ValueError("candidate_id is required")
+    with FisSessionLocal() as db:
+        candidate = db.get(SyntheticEgeCandidate, candidate_id)
+        if candidate is None:
+            raise ValueError(f"Candidate {candidate_id} not found in the synthetic registry")
+        results = db.scalars(
+            select(SyntheticEgeResult)
+            .where(
+                SyntheticEgeResult.candidate_id == candidate_id,
+                SyntheticEgeResult.status == "valid",
+            )
+            .order_by(SyntheticEgeResult.subject, SyntheticEgeResult.year.desc())
+        )
+        return jsonable_encoder(
+            {
+                "candidate_id": candidate.candidate_id,
+                "full_name": candidate.full_name,
+                "date_of_birth": candidate.date_of_birth,
+                "results": [
+                    {"subject": r.subject, "year": r.year, "score": r.score}
+                    for r in results
+                ],
+            }
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,13 +312,17 @@ def fetch_web_page(url: str, section_query: str | None = None) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SQL tool: direct SQL access to the MAI data store (second external data source)
+# SQL tool: the agent's own database (mai_agent) — second external data source
 # ─────────────────────────────────────────────────────────────────────────────
 #
 # Demo-version policy: access is intentionally OPEN. Any single PostgreSQL
 # statement is allowed — SELECT, INSERT, UPDATE, DELETE, DDL, etc. There is
 # no RBAC, no statement-type filtering and no table-level restrictions.
 # The 500-row cap below limits SELECT RESULT DISPLAY ONLY, never execution.
+#
+# The tool is bound to the agent's own database ONLY: the ФИС ГИА registry
+# (another database) is reachable exclusively through the ФИС MCP tools, and
+# the Backend service database is not reachable at all.
 
 _SQL_MAX_RESULT_ROWS = 500
 
@@ -279,18 +368,28 @@ def run_sql(db, statement: str, limit: int = 100) -> dict[str, object]:
 
 @mcp.tool
 def sql_query(sql: str, limit: int = 100) -> dict[str, object]:
-    """Run a SQL statement against the MAI data store.
+    """Run a SQL statement against the agent's own database (mai_agent).
 
     Open access (demo version): any single statement is allowed —
     SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP and other
     supported PostgreSQL commands. No query-type or table restrictions.
 
-    Available data:
+    This is the agent's own campaign database:
+    - applicants — applicants (id, full_name, date_of_birth, contact);
+    - ege_scores — EGE scores (applicant_id, candidate_id — ФИС reference,
+      subject, year, score);
+    - applications — applications (applicant_id, program_code, program_name,
+      form: budget/paid, status);
+    - ratings — admission ratings (program_code, form, year, applicant_id,
+      place, total_score);
     - knowledge_sources / knowledge_chunks — official admission materials
-      (title, url, content);
-    - synthetic_ege_candidates / synthetic_ege_results — the synthetic
-      ФИС ГИА registry (people, subjects, scores);
-    - agent_sessions / telegram_checkpoints — session mappings.
+      (title, url, content).
+
+    The synthetic ФИС ГИА registry lives in ANOTHER database and is not
+    visible here: read it only through the ФИС MCP tools
+    (search_synthetic_ege_results, list_synthetic_ege_candidates,
+    get_synthetic_ege_results) and transfer the data into this database
+    (applicants + ege_scores) when working with a person.
 
     Result shapes:
     - row-returning statements: JSON with columns, rows, row_count, limit
@@ -305,5 +404,5 @@ def sql_query(sql: str, limit: int = 100) -> dict[str, object]:
         limit: maximum number of rows to display for SELECT (default 100, max 500).
     """
     statement = _validate_sql(sql)
-    with SessionLocal() as db:
+    with OwnSessionLocal() as db:
         return run_sql(db, statement, limit)

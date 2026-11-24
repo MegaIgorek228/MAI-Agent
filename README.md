@@ -21,13 +21,21 @@
   штатных механизмах Hermes (`state.db`, `MEMORY.md`); Backend не дублирует
   их. Сессии восстанавливаются после перезапуска Backend.
 - **MCP-сервер** (встроен в Backend, FastMCP) — источники данных для агента:
-  1. имитация ФИС ГИА (синтетический реестр участников ЕГЭ);
-  2. SQL — `sql_query` (произвольные SQL-команды к базе: SELECT, INSERT,
-     UPDATE, DELETE, DDL; 500 строк — лимит вывода SELECT);
-  3. `fetch_web_page` — веб-страницы.
+  1. синтетическая ФИС ГИА (отдельная БД `mai_fis_gia`, источник
+     результатов ЕГЭ; только чтение: `search_synthetic_ege_results`,
+     `list_synthetic_ege_candidates`, `get_synthetic_ege_results`);
+  2. собственная БД агента (`mai_agent`: applicants, ege_scores,
+     applications, ratings, knowledge_*) — `sql_query` (произвольные
+     SQL-команды: SELECT, INSERT, UPDATE, DELETE, DDL; 500 строк — лимит
+     вывода SELECT); агент сам переносит данные из ФИС в свою БД;
+  3. интернет — собственные инструменты Hermes (терминал, curl, Python) и
+     `fetch_web_page` — веб-страницы.
 
-Хранилище Backend — PostgreSQL (`agent_sessions` + источники данных).
-Схема БД — в миграциях Alembic.
+Хранилище Backend — PostgreSQL, три независимые БД: `mai_backend`
+(служебная: `agent_sessions`, `telegram_checkpoints`), `mai_agent` (своя
+БД агента), `mai_fis_gia` (синтетическая ФИС ГИА). Схема служебной БД — в
+миграциях Alembic; две остальные создаются `python -m app.init_databases`
+при старте backend.
 
 ## Технологии
 

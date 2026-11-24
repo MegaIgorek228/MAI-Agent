@@ -24,7 +24,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
-from app.db import SessionLocal
+from app.db import FisSessionLocal
 from app.models import SyntheticEgeCandidate, SyntheticEgeResult
 
 SyntheticCandidateId = Annotated[str, Field(pattern=r"^SYN-[A-Za-z0-9-]{1,40}$")]
@@ -154,7 +154,9 @@ def main() -> None:
     args = parser.parse_args()
     try:
         candidates, results = _parse(args.fixture.read_bytes())
-        with SessionLocal() as db:
+        # The registry lives in the synthetic ФИС ГИА database, not in the
+        # Backend service database.
+        with FisSessionLocal() as db:
             (added_people, updated_people), (added_scores, updated_scores) = load_fixture(
                 db, candidates, results, replace_conflicts=args.replace_conflicts,
             )

@@ -37,12 +37,19 @@
 ┌────────────────────────────────────────────────────────┐
 │ MCP-инструменты (внутри Backend)                       │
 │  • fetch_web_page — веб-страницы                       │
-│  • search_synthetic_ege_results — имитация ФИС ГИА     │
-│  • sql_query — произвольный SQL (500 строк — вывод)    │
+│  • search_synthetic_ege_results — ФИС ГИА (чтение)     │
+│  • list_synthetic_ege_candidates — ФИС ГИА (чтение)    │
+│  • get_synthetic_ege_results — ФИС ГИА (чтение)        │
+│  • sql_query — произвольный SQL, своя БД агента        │
+│    (500 строк — лимит вывода SELECT)                   │
 └──────────────┬─────────────────────────────────────────┘
                ▼
-   PostgreSQL (agent_sessions, synthetic_ege_*,
-   knowledge_*, telegram_checkpoints)
+   Три независимые БД PostgreSQL:
+   mai_fis_gia (синтетическая ФИС ГИА: synthetic_ege_*)
+   mai_agent   (своя БД агента: applicants, ege_scores,
+                applications, ratings, knowledge_*)
+   mai_backend (служебная: agent_sessions,
+                telegram_checkpoints; MCP не видит)
 ```
 
 ## Компоненты
@@ -76,12 +83,13 @@
 - память — штатная `MEMORY.md` и сессии Hermes (`state.db`, SQLite):
   Backend ничего из этого не дублирует;
 - **важная особенность**: ACP-адаптер хардкодит набор инструментов пресетом
-  `hermes-acp` и игнорирует `platform_toolsets` из config.yaml. Состав пресета
-  задаётся в плагине `plugins/model-providers/custom`
-  (`_install_mai_acp_toolset_override`): 10 штатных инструментов.
-  Web-инструменты Hermes (web_search/web_extract) в пресете намеренно
-  отсутствуют (нет платных ключей поисковых бэкендов) — за страницами агент
-  ходит через MCP `fetch_web_page`.
+  `hermes-acp`. Состав пресета задаётся в плагине
+  `plugins/model-providers/custom`
+  (`_install_mai_acp_toolset_override`): полный реестр инструментов Hermes
+  резолвится в момент сборки сессии (все штатные инструменты, включая
+  terminal/файлы/execute_code; web_search/web_extract доступны, но в среде
+  не работают — см. SOUL.md). Интернет — через собственные инструменты
+  Hermes (терминал, curl, Python) и MCP `fetch_web_page`.
 
 ### Web (React + TypeScript)
 Простой чат без регистрации и токенов:
@@ -104,19 +112,34 @@
   PostgreSQL, поэтому переживает перезапуск Backend;
 - аккаунты и роли не создаются — только маппинг чата на сессию.
 
-### Источники данных (через MCP, без привязки к профилям)
-1. **Имитация ФИС ГИА** — `search_synthetic_ege_results` (ФИО + дата
-   рождения) поверх таблиц `synthetic_ege_candidates` / `synthetic_ege_results`;
-   фикстура `backend/fixtures/synthetic_ege_registry.json`, загрузка — CLI
-   `synthetic_ege_registry`.
-2. **SQL-хранилище** — `sql_query`: произвольная SQL-команда PostgreSQL
-   (SELECT, INSERT, UPDATE, DELETE, CREATE/ALTER/DROP и другие; в демонстрационной
-   версии доступ намеренно открыт — без RBAC и ограничений по типам команд);
-   одна команда на вызов; лимит 500 строк действует только на вывод результата
-   SELECT, не на выполнение. Доступно: `knowledge_*`, `synthetic_ege_*`,
-   `agent_sessions` и служебные таблицы.
-3. **Веб** — `fetch_web_page`: HTTPS GET с SSRF-защитой, возврат текста
-   страницы.
+### Источники данных (фиксация архитектуры от 2026-11-24)
+
+Три независимые БД на одном PostgreSQL-сервере + интернет:
+
+1. **Синтетическая ФИС ГИА** — отдельная БД `mai_fis_gia` (таблицы
+   `synthetic_ege_candidates` / `synthetic_ege_results`). Источник
+   результатов ЕГЭ; доступна агенту ТОЛЬКО через MCP-инструменты и
+   только для чтения: `search_synthetic_ege_results` (ФИО + дата
+   рождения), `list_synthetic_ege_candidates` (список участников),
+   `get_synthetic_ege_results` (результаты по `candidate_id`). Фикстура
+   `backend/fixtures/synthetic_ege_registry.json`, загрузка — CLI
+   `synthetic_ege_registry` (пишет в `mai_fis_gia`), автозагрузка при
+   старте — `python -m app.init_databases`.
+2. **Своя БД MAI-Agent** — отдельная БД `mai_agent`: абитуриенты
+   `applicants`, баллы ЕГЭ `ege_scores`, заявления `applications`,
+   рейтинги `ratings`, материалы приёма `knowledge_*`. Доступ агента —
+   `sql_query`: произвольная SQL-команда PostgreSQL (SELECT, INSERT,
+   UPDATE, DELETE, CREATE/ALTER/DROP и другие; в демонстрационной версии
+   доступ намеренно открыт — без RBAC и ограничений по типам команд);
+   одна команда на вызов; лимит 500 строк действует только на вывод
+   результата SELECT, не на выполнение. Агент сам переносит данные из
+   ФИС (через MCP) в свою БД (через SQL) и работает с ними.
+3. **Интернет** — собственные инструменты Hermes: терминал, curl, Python
+   (requests/urllib); для готовых страниц официального сайта удобнее
+   `fetch_web_page` (HTTPS GET с SSRF-защитой, возврат текста страницы).
+
+Служебная БД `mai_backend` (agent_sessions, telegram_checkpoints, alembic)
+доступна только Backend и ни одному MCP-инструменту не видна.
 
 ## Сессии и их изоляция
 - сессия (`agent_sessions`) — единственная сущность контекста:

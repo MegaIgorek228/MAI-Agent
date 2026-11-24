@@ -148,11 +148,16 @@ def main() -> int:
     reply = chat(sid, "Выполни в терминале команду: echo MAI_TERM_OK. Ответь только точным выводом команды.")
     check("terminal command executed", "MAI_TERM_OK" in reply.get("content", ""), str(reply)[:250])
 
-    # 8. SQL data source via the sql_query MCP tool.
+    # 8. Agent transfers data from ФИС into its own database (MCP read + SQL write).
     reply = chat(sid,
-                 "Используй MCP-инструмент sql_query, чтобы посчитать количество строк в таблице "
-                 "synthetic_ege_results. Ответь только количеством строк.")
-    check("SQL source queried via MCP", re.search(r"\b30\b", reply.get("content", "")) is not None, str(reply)[:250])
+                 "Сначала через sql_query удали все строки из таблиц ege_scores и applicants своей БД. "
+                 "Затем возьми первого участника синтетической ФИС ГИА (отсортируй по candidate_id, "
+                 "возьми первый), прочитай его результаты через MCP-инструменты ФИС и перенеси в свою "
+                 "БД: создай запись в applicants и впиши все его результаты в ege_scores "
+                 "(applicant_id, candidate_id, subject, year, score). "
+                 "Ответь только итоговым количеством строк в ege_scores.")
+    check("agent moved ФИС data into own DB (sql_query)",
+          re.search(r"\b3\b", reply.get("content", "")) is not None, str(reply)[:250])
 
     # 9. Synthetic ФИС ГИА via the MCP registry tool.
     reply = chat(sid,

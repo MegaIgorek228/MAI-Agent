@@ -4,7 +4,10 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-mai_agent}
+      # The service (operational) database only. The agent's own database
+      # (mai_agent) and the synthetic ФИС ГИА database (mai_fis_gia) are
+      # created and maintained by `python -m app.init_databases` on startup.
+      POSTGRES_DB: ${POSTGRES_DB:-mai_backend}
       POSTGRES_USER: ${POSTGRES_USER:-mai_agent}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me}
     volumes:
@@ -20,7 +23,7 @@ services:
       context: ./backend
     environment:
       APP_ENV: ${APP_ENV:-development}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mai_agent}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-mai_agent}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-mai_agent}:${POSTGRES_PASSWORD:-change_me}@postgres:5432/${POSTGRES_DB:-mai_backend}
       ACP_TRANSPORT: ${ACP_TRANSPORT:-stdio}
       HERMES_COMMAND: ${HERMES_COMMAND:-hermes-acp}
       HERMES_CWD: ${HERMES_CWD:-/app}
@@ -43,7 +46,7 @@ services:
       # first use; the container has no unrestricted egress and the download
       # hangs the agent turn. Disable it (inherited by hermes-acp via env).
       TIRITH_ENABLED: "false"
-    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "python -m app.init_databases && alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready', timeout=3).close()"]
       interval: 5s
