@@ -1,7 +1,7 @@
 {
   "candidates": [
     {"candidate_id": "SYN-1001", "full_name": "Алексей Иванович Иванов", "date_of_birth": "2008-03-14"},
-    {"candidate_id": "SYN-1002", "full_name": "Мария Петровна Петрова", "date_of_birth": "2008-07-22"},
+    {"candidate_id": "SYN-1002", "full_name": "Мария Ивановна Иванова", "date_of_birth": "2008-03-14"},
     {"candidate_id": "SYN-1003", "full_name": "Дмитрий Сергеевич Смирнов", "date_of_birth": "2008-11-02"},
     {"candidate_id": "SYN-1004", "full_name": "Анна Александровна Васильева", "date_of_birth": "2008-01-19"},
     {"candidate_id": "SYN-1005", "full_name": "Игорь Петрович Сидоров", "date_of_birth": "2008-09-30"},

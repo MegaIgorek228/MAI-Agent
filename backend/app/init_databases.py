@@ -83,7 +83,9 @@ def _ensure_server_databases() -> None:
     from sqlalchemy import create_engine
 
     server_url = str(make_url(str(url)).set(database="postgres"))
-    server_engine = create_engine(server_url)
+    # CREATE DATABASE cannot run inside a transaction block, so this
+    # connection is autocommit: each statement commits on its own.
+    server_engine = create_engine(server_url, isolation_level="AUTOCOMMIT")
     try:
         with server_engine.connect() as conn:
             for db_name in (settings.own_db_name, settings.fis_db_name):
@@ -93,7 +95,6 @@ def _ensure_server_databases() -> None:
                 if not exists:
                     # Database names are fixed identifiers from settings, not user input.
                     conn.execute(text(f'CREATE DATABASE "{db_name}"'))
-                    conn.commit()
                     print(f"[init-databases] created database {db_name}")
     finally:
         server_engine.dispose()

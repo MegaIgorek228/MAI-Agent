@@ -33,7 +33,7 @@
      намеренно открыт: любые одиночные SQL-команды PostgreSQL). Агент
      сам переносит данные из ФИС в свою БД и работает с ними;
   3. **Интернет** — собственные инструменты Hermes (терминал, curl,
-     Python); для готовых страниц официального сайта — `fetch_web_page`.
+     Python).
 - **Служебная БД Backend** — третья, отдельная БД `mai_backend`
   (`agent_sessions`, `telegram_checkpoints`, alembic): доступна только
   Backend, ни одному MCP-инструменту не видна.
@@ -62,7 +62,7 @@
 | Агент | Hermes Agent (пакет `hermes-agent`, ACP stdio) | Единственный агент: диалог, планирование, инструменты, память |
 | Backend | Python + FastAPI | Транспорт Web/Telegram ↔ Hermes, MCP-хост |
 | Связь Backend ↔ Hermes | ACP (stdio) | Протокол `acp`, пул процессов `hermes-acp` |
-| Инструменты агента | MCP + FastMCP | ФИС ГИА (чтение), sql_query (собственная БД), веб-страницы |
+| Инструменты агента | MCP + FastMCP | ФИС ГИА (чтение), sql_query (собственная БД) |
 | LLM | DeepSeek (deepseek-v4.1-flash) через MAI relay | Модель Hermes (OpenAI-совместимый API) |
 | БД (три независимые) | PostgreSQL | `mai_backend` — служебная (agent_sessions); `mai_agent` — своя БД агента (applicants, ege_scores, applications, ratings, knowledge_*); `mai_fis_gia` — синтетическая ФИС ГИА (результаты ЕГЭ) |
 | Состояние Hermes | SQLite в профиле Hermes | Внутреннее хранение сессий и памяти Hermes |
@@ -83,7 +83,7 @@
    только чтение, через MCP-инструменты), собственная БД агента
    (`sql_query` — произвольные команды, намеренно открытый доступ
    демонстрационной версии), интернет через собственные инструменты
-   Hermes (терминал, curl, Python) и `fetch_web_page`.
+   Hermes (терминал, curl, Python).
 5. Разделение сессий: каждый пользователь (Web или Telegram) имеет собственную
    сессию Hermes; два канала не смешивают чужие диалоги.
 

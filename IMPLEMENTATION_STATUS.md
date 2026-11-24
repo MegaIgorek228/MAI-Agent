@@ -21,12 +21,13 @@
    legacy-таблиц (в порядке FK-зависимостей); downgrade намеренно не
    реализован — откат только из резервной копии
    (`mai_agent_pre_sessionless_20261123_1217.sql`).
-3. **MCP — 5 контекстно-чистых инструментов** (`mcp_tools.py`):
-   `fetch_web_page` (HTTPS, SSRF-защита), ФИС ГИА (отдельная БД, только
-   чтение): `search_synthetic_ege_results`, `list_synthetic_ege_candidates`,
-   `get_synthetic_ege_results`, и `sql_query` (произвольные SQL-команды
-   PostgreSQL к собственной БД агента; 500 строк — лимит вывода SELECT).
-   Заголовков авторизации нет.
+3. **MCP — 4 контекстно-чистых инструмента** (`mcp_tools.py`): ФИС ГИА
+   (отдельная БД, только чтение): `search_synthetic_ege_results`,
+   `list_synthetic_ege_candidates`, `get_synthetic_ege_results`, и
+   `sql_query` (произвольные SQL-команды PostgreSQL к собственной БД
+   агента; 500 строк — лимит вывода SELECT). Веб-доступ не является
+   MCP-инструментом: агент использует собственные инструменты Hermes
+   (терминал, curl, Python). Заголовков авторизации нет.
 4. **Фронтенд — чат без регистрации**: `App.tsx` (список UUID-сессий в
    `localStorage`, автосоздание, восстановление, удаление),
    `AssistantWorkspace.tsx` (история, переключение, изображения base64),
@@ -75,7 +76,7 @@
    MCP-инструменту не видна. Агент сам переносит данные из ФИС в свою БД
    и работает с ними; Backend остаётся транспортным мостом, бизнес-логика —
    в Hermes. Интернет — собственные инструменты Hermes (терминал, curl,
-   Python) + `fetch_web_page`. Реализация: `app/init_databases.py`
+   Python). Реализация: `app/init_databases.py`
    (идемпотентное создание `mai_agent`/`mai_fis_gia` + загрузка фикстуры
    ФИС, вызывается в entrypoint перед alembic), `app/db.py` (три движка),
    миграция `0014_drop_external_data` (служебная БД освобождена от внешних

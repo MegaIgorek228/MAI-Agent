@@ -1,16 +1,16 @@
 """MCP tools exposed to the Hermes agent (mounted at ``/mcp`` inside Backend).
 
-Three data capabilities, no user context, mapped to the three-database
+Two data capabilities, no user context, mapped to the three-database
 architecture:
 - ФИС ГИА (synthetic EGE results source, ``mai_fis_gia`` DB) — read-only:
   ``search_synthetic_ege_results`` (full name + date of birth),
   ``list_synthetic_ege_candidates`` and ``get_synthetic_ege_results``
   (browse the registry by candidate id);
 - the agent's own database (``mai_agent`` DB) — ``sql_query``: open SQL
-  access to applicants, applications, ege_scores, ratings, knowledge_*;
-- the internet — ``fetch_web_page``: live MAI admission pages over HTTPS
-  (SSRF-guarded); the agent may also use its native terminal/curl/Python
-  tools for web work.
+  access to applicants, applications, ege_scores, ratings, knowledge_*.
+
+Web access is NOT an MCP capability: the agent uses its native tools
+(terminal, curl, Python) for the internet.
 
 The Backend service database (agent_sessions, telegram_checkpoints) is NOT
 reachable from any tool below.
@@ -19,28 +19,16 @@ None of the tools is bound to a user profile: there are no user accounts in
 the system, and the trusted-context header is not sent to the MCP server.
 """
 
-import ipaddress
-import socket
 from datetime import date
-from urllib.parse import urlsplit
 
-import httpx
 from fastapi.encoders import jsonable_encoder
 from fastmcp import FastMCP
 from sqlalchemy import func, select, text
 
 from app.db import FisSessionLocal, OwnSessionLocal
 from app.models import SyntheticEgeCandidate, SyntheticEgeResult
-from app.official_materials import extract_html_content
 
 mcp = FastMCP("MAI-Agent tools")
-
-# Safety limits for the web-fetch tool (called by the LLM agent).
-_FETCH_TIMEOUT_S = 25.0
-_FETCH_MAX_BODY_BYTES = 2_000_000
-_FETCH_MAX_OUTPUT_CHARS = 25_000
-_FETCH_MAX_REDIRECTS = 5
-_FETCH_USER_AGENT = "Mozilla/5.0 (compatible; MAI-Agent/1.0)"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,112 +191,6 @@ def get_synthetic_ege_results(candidate_id: str) -> dict[str, object]:
                 ],
             }
         )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Live MAI admission pages
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _assert_public_host(hostname: str) -> None:
-    """Reject hostnames that resolve to non-public addresses (SSRF guard)."""
-    try:
-        infos = socket.getaddrinfo(hostname, None)
-    except socket.gaierror as exc:
-        raise ValueError(f"Cannot resolve host: {hostname}") from exc
-    if not infos:
-        raise ValueError(f"Cannot resolve host: {hostname}")
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global:
-            raise ValueError(f"Host {hostname} resolves to a non-public address")
-
-
-@mcp.tool
-def fetch_web_page(url: str, section_query: str | None = None) -> str:
-    """Fetch visible HTTPS page content, retaining source URL and table rows.
-
-    This is the agent's data source for live admission information:
-    passing scores, program lists, tuition, deadlines, admission results.
-
-    Ready-to-use pages (admissions site of MAI — Moscow Aviation Institute):
-      https://priem.mai.ru/base/score/           - passing scores (table by
-            program FZ code and full name, budget/paid, by year)
-      https://priem.mai.ru/base/offers/          - educational programs
-      https://priem.mai.ru/base/tuition-fees/    - tuition (paid education)
-      https://priem.mai.ru/orders/deadlines/     - application deadlines
-      https://priem.mai.ru/calendar/             - admissions campaign calendar
-      https://www.mai.ru                         - university main site
-
-    Notes:
-    - Only https URLs are allowed; private/internal addresses are rejected.
-    - Programs in the score tables are listed by FZ code and full name
-      (e.g. 01.03.02 "Прикладная математика и информатика"); abbreviations
-      like "ПМИ" are NOT used — search by code or full name.
-    - Returns up to ~25k characters of plain text (truncated if longer).
-
-    Args:
-        url: absolute https URL of the page to fetch.
-        section_query: optional program code or phrase to extract surrounding lines from long pages.
-    """
-    url = url.strip()
-    parts = urlsplit(url)
-    if parts.scheme != "https" or not parts.hostname:
-        raise ValueError("Only absolute https:// URLs are allowed")
-    for _hop in range(_FETCH_MAX_REDIRECTS):
-        _assert_public_host(parts.hostname)
-        try:
-            resp = httpx.get(
-                url,
-                timeout=_FETCH_TIMEOUT_S,
-                follow_redirects=False,
-                headers={"User-Agent": _FETCH_USER_AGENT},
-            )
-        except httpx.HTTPError as exc:
-            raise ValueError(f"Request failed: {exc.__class__.__name__}") from exc
-        if resp.status_code in (301, 302, 303, 307, 308):
-            location = resp.headers.get("location", "")
-            if not location:
-                raise ValueError("Redirect without Location header")
-            url = httpx.URL(url).join(location).url
-            parts = urlsplit(url)
-            if parts.scheme != "https" or not parts.hostname:
-                raise ValueError("Redirect left https scope")
-            continue
-        break
-    else:
-        raise ValueError("Too many redirects")
-
-    if resp.status_code != 200:
-        raise ValueError(f"Page returned HTTP {resp.status_code}")
-    if len(resp.content) > _FETCH_MAX_BODY_BYTES:
-        raise ValueError("Page too large to process")
-
-    content_type = resp.headers.get("content-type", "").lower()
-    title = ""
-    if "text/html" in content_type or not content_type:
-        title, text = extract_html_content(resp.text)
-    elif "text/plain" in content_type:
-        text = resp.text
-    else:
-        raise ValueError(f"Unsupported content type: {content_type or 'unknown'}")
-
-    text = text.strip()
-    if not text:
-        raise ValueError("Page contains no readable text")
-    if section_query and section_query.strip():
-        lines = text.splitlines()
-        query = section_query.casefold().strip()
-        matched_lines = [index for index, line in enumerate(lines) if query in line.casefold()]
-        if not matched_lines:
-            raise ValueError("The requested program code or phrase was not found on the page")
-        context_lines = set(range(min(6, len(lines))))
-        for index in matched_lines[:30]:
-            context_lines.update(range(max(0, index - 3), min(len(lines), index + 4)))
-        text = "\n".join(lines[index] for index in sorted(context_lines))
-    if len(text) > _FETCH_MAX_OUTPUT_CHARS:
-        text = text[:_FETCH_MAX_OUTPUT_CHARS] + "\n... [truncated]"
-    return f"Source: {resp.url}\nTitle: {title or resp.url}\n\n{text}"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

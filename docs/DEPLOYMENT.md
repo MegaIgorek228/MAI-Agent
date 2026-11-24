@@ -67,7 +67,7 @@ cp .env.example .env
 
 ```ini
 APP_ENV=development
-POSTGRES_DB=mai_agent
+POSTGRES_DB=mai_backend
 POSTGRES_USER=mai_agent
 POSTGRES_PASSWORD=<свой-пароль>
 LLM_BASE_URL=https://api-ai.mai.ru/v1

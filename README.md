@@ -28,8 +28,7 @@
      applications, ratings, knowledge_*) — `sql_query` (произвольные
      SQL-команды: SELECT, INSERT, UPDATE, DELETE, DDL; 500 строк — лимит
      вывода SELECT); агент сам переносит данные из ФИС в свою БД;
-  3. интернет — собственные инструменты Hermes (терминал, curl, Python) и
-     `fetch_web_page` — веб-страницы.
+  3. интернет — собственные инструменты Hermes (терминал, curl, Python).
 
 Хранилище Backend — PostgreSQL, три независимые БД: `mai_backend`
 (служебная: `agent_sessions`, `telegram_checkpoints`), `mai_agent` (своя
@@ -60,7 +59,7 @@ TypeScript, Docker Compose. Модель — `deepseek-v4.1-flash` через MA
 │   └── hermes-profile/ # профиль Hermes: config.yaml, SOUL.md, плагины
 ├── frontend/           # React + TypeScript: чат с агентом
 ├── scripts/            # e2e-проверки (e2e_minimal_agent.py)
-├── tests/              # pytest (39 тестов)
+├── tests/              # pytest (48 тестов)
 └── docs/               # архитектура, развёртывание, статус
 ```
 
@@ -99,8 +98,8 @@ docker compose exec backend python -m app.synthetic_ege_registry /app/fixtures/s
 ## Проверки
 
 ```bash
-# unit-тесты (39): SQL-инструмент, сессии, Telegram (включая /new),
-# жизненный цикл Hermes, реестр ФИС
+# unit-тесты (48): SQL-инструмент, сессии, Telegram (включая /new),
+# жизненный цикл Hermes, реестр ФИС, ФИС-MCP-инструменты
 cd backend
 python -m pytest ../tests -q
 

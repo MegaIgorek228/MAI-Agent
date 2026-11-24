@@ -183,7 +183,7 @@ _install_mai_httpx_fix()
 # discord, feishu, homeassistant, yuanbao, kanban, GUI-only project tools,
 # ...) are NOT hard errors: each tool's own check_fn marks it unavailable
 # for the turn (tools/registry.py: "dependent tools will be unavailable").
-# Session MCP tools (fetch_web_page, sql_query, ФИС ГИА) are registered per
+# Session MCP tools (sql_query, ФИС ГИА) are registered per
 # ACP session and are not gated by this toolset — they stay available.
 def _install_mai_acp_toolset_override() -> None:
     try:
